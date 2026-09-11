@@ -435,6 +435,7 @@ st.caption(
 _SESSION_DEFAULTS = {
     "prompt": "",
     "prompt_approved": False,
+    "approved_prompt_text": "",
     "model_instance_id": None,
     "model_name": None,
     "model_unloaded": True,
@@ -451,6 +452,7 @@ if _reused:
     st.session_state.prompt = _reused["prompt"]
     st.session_state.final_prompt_editor = _reused["prompt"]
     st.session_state.prompt_approved = False
+    st.session_state.approved_prompt_text = ""
     st.session_state.prompt_source_model = _reused["model"]
     _workflow = WORKFLOWS_DIR / _reused["workflow"]
     if _reused["workflow"] and _workflow in get_available_workflows():
@@ -908,6 +910,7 @@ with left_col:
             st.session_state.model_instance_id = generated.instance_id or instance_id
             st.session_state.model_name = generated.model
             st.session_state.prompt_approved = False
+            st.session_state.approved_prompt_text = ""
 
             # Kopieer de instance-id eerst uit Streamlit session_state.
             # De worker-thread mag session_state zelf niet aanspreken.
@@ -945,12 +948,23 @@ with left_col:
         height=280,
     )
 
-    previous_prompt = st.session_state.get("prompt", "")
-    if edited_prompt != previous_prompt:
-        st.session_state.prompt_approved = False
-
+    # De editor is de enige bron van waarheid voor de prompt die naar
+    # ComfyUI wordt gestuurd.
     st.session_state.prompt = edited_prompt
     field_values["prompt"] = edited_prompt
+
+    # Een goedkeuring hoort bij exact één tekstversie. Zodra de gebruiker
+    # de prompt wijzigt, vervalt de vorige goedkeuring. Dit voorkomt dat
+    # Streamlit-reruns de knop "Send to ComfyUI" permanent blokkeren.
+    approved_prompt_text = st.session_state.get("approved_prompt_text", "")
+    prompt_matches_approval = bool(
+        st.session_state.get("prompt_approved")
+        and edited_prompt == approved_prompt_text
+    )
+
+    if st.session_state.get("prompt_approved") and not prompt_matches_approval:
+        st.session_state.prompt_approved = False
+        prompt_matches_approval = False
 
     approve_col, render_col = st.columns(2)
 
@@ -960,6 +974,11 @@ with left_col:
             disabled=not edited_prompt.strip(),
             use_container_width=True,
         ):
+            # Bewaar exact de tekst die werd goedgekeurd. Na een handmatige
+            # wijziging kan de nieuwe versie opnieuw worden goedgekeurd en
+            # onmiddellijk naar ComfyUI worden gestuurd.
+            st.session_state.prompt = edited_prompt
+            st.session_state.approved_prompt_text = edited_prompt
             st.session_state.prompt_approved = True
 
             # Een handmatig ingevoerde/geplakte H3-prompt heeft geen
@@ -1015,6 +1034,7 @@ with left_col:
         and required_images_ready
         and st.session_state.get("model_unloaded")
         and st.session_state.get("prompt_approved")
+        and edited_prompt == st.session_state.get("approved_prompt_text", "")
     )
 
     with render_col:
