@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import base64
+from threading import RLock
+
+_MODEL_LOCK = RLock()
 from dataclasses import dataclass
 from typing import Any
 
@@ -9,6 +12,18 @@ import requests
 
 class LMStudioError(RuntimeError):
     """Readable error raised for LM Studio communication failures."""
+
+
+@dataclass(frozen=True)
+class LoadedInstance:
+    model: str
+    instance_id: str
+
+
+class ModelLoadConfirmationRequired(LMStudioError):
+    def __init__(self, instances: list[LoadedInstance]) -> None:
+        self.instances = instances
+        super().__init__("Confirm unloading the currently loaded LM Studio instances first.")
 
 
 @dataclass(frozen=True)
@@ -43,37 +58,52 @@ class LMStudioClient:
         data = self._request("GET", "/v1/models").json()
         return [item["id"] for item in data.get("data", []) if item.get("id")]
 
+    def loaded_instances(self) -> list[LoadedInstance]:
+        """Fail closed if the native API cannot establish the loaded state."""
+        data = self._request("GET", "/api/v1/models").json()
+        if not isinstance(data, dict) or not isinstance(data.get("models"), list):
+            raise LMStudioError("Cannot verify LM Studio loaded models: invalid response.")
+        result = []
+        for item in data["models"]:
+            if not isinstance(item, dict) or not isinstance(item.get("loaded_instances"), list):
+                raise LMStudioError("Cannot verify LM Studio loaded instances.")
+            for instance in item["loaded_instances"]:
+                if (not isinstance(instance, dict) or not instance.get("id")
+                        or not item.get("key")):
+                    raise LMStudioError("LM Studio returned an unidentified loaded instance.")
+                result.append(LoadedInstance(item["key"], instance["id"]))
+        return result
+
     def _find_instance_id(self, model: str) -> str | None:
-        try:
-            data = self._request("GET", "/api/v1/models").json()
-        except LMStudioError:
-            return None
-
-        models = data.get(
-            "models",
-            data.get("data", data if isinstance(data, list) else []),
-        )
-
-        for item in models if isinstance(models, list) else []:
-            if item.get("key") == model or item.get("id") == model or item.get("model") == model:
-                instances = item.get("loaded_instances", item.get("instances", []))
-                if instances:
-                    return instances[0].get("id") or instances[0].get("instance_id")
+        for instance in self.loaded_instances():
+            if model in (instance.model, instance.instance_id):
+                return instance.instance_id
         return None
 
-    def load_model(self, model: str) -> str:
-        data = self._request(
-            "POST",
-            "/api/v1/models/load",
-            json={"model": model},
-        ).json()
-
-        instance_id = data.get("instance_id") or data.get("model_instance_id")
-        if not instance_id:
-            raise LMStudioError(
-                "LM Studio loaded the model but did not return an instance_id."
-            )
-        return instance_id
+    def load_model(
+        self, model: str, *, approved_instances: list[LoadedInstance] | None = None,
+    ) -> str:
+        # Serialize loads across client objects and Streamlit sessions in this process.
+        with _MODEL_LOCK:
+            instances = self.loaded_instances()
+            if len(instances) == 1 and model in (instances[0].model, instances[0].instance_id):
+                return instances[0].instance_id
+            if instances:
+                if approved_instances is None or not set(instances).issubset(set(approved_instances)):
+                    raise ModelLoadConfirmationRequired(instances)
+                for instance in instances:
+                    self.unload_model(instance.instance_id)
+                # Never assume that a successful unload response means memory is clear.
+                remaining = self.loaded_instances()
+                if remaining:
+                    raise ModelLoadConfirmationRequired(remaining)
+            data = self._request(
+                "POST", "/api/v1/models/load", json={"model": model},
+            ).json()
+            instance_id = data.get("instance_id") or data.get("model_instance_id")
+            if not instance_id:
+                raise LMStudioError("LM Studio did not return an instance_id after loading.")
+            return instance_id
 
     def generate_prompt(
         self,
@@ -98,8 +128,9 @@ class LMStudioClient:
         else:
             user_content = user_request
 
+        instance_id = self.load_model(model)
         payload = {
-            "model": model,
+            "model": instance_id,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
@@ -121,7 +152,7 @@ class LMStudioClient:
         return GeneratedPrompt(
             text=text,
             model=data.get("model", model),
-            instance_id=self._find_instance_id(model),
+            instance_id=instance_id,
         )
 
     def unload_model(self, instance_id: str | None) -> None:

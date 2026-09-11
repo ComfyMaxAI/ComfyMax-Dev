@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import sqlite3
 import shutil
 import subprocess
 import tempfile
@@ -19,8 +20,9 @@ from modules.comfyui import (
     apply_mapping,
     load_api_workflow,
 )
-from modules.lmstudio import LMStudioClient, LMStudioError
+from modules.lmstudio import LMStudioClient, LMStudioError, ModelLoadConfirmationRequired
 from modules.prompt_enhancer import get_h3_system_prompt
+from modules.prompt_library import PromptLibrary
 
 
 # =========================================================
@@ -443,11 +445,28 @@ for _key, _default in _SESSION_DEFAULTS.items():
         st.session_state[_key] = _default
 
 
+# Consume library navigation before constructing any prompt/workflow widgets.
+_reused = st.session_state.pop("library_reuse", None)
+if _reused:
+    st.session_state.prompt = _reused["prompt"]
+    st.session_state.final_prompt_editor = _reused["prompt"]
+    st.session_state.prompt_approved = False
+    st.session_state.prompt_source_model = _reused["model"]
+    _workflow = WORKFLOWS_DIR / _reused["workflow"]
+    if _reused["workflow"] and _workflow in get_available_workflows():
+        st.session_state.selected_workflow = _workflow
+    else:
+        st.warning("The saved workflow is unavailable. Select a suitable workflow before rendering.")
+    st.info("Saved prompt loaded. Review settings and reference images, then approve before rendering.")
+if "final_prompt_editor" not in st.session_state:
+    st.session_state.final_prompt_editor = st.session_state.prompt
+
 # =========================================================
 # Sidebar en clients
 # =========================================================
 
 with st.sidebar:
+    st.page_link("pages/Prompt_Library.py", label="Prompt Library", icon="📚")
     st.header("Local services")
     lm_url = st.text_input("LM Studio", APP_CONFIG["lmstudio_url"])
     comfy_url = st.text_input("ComfyUI", APP_CONFIG["comfyui_url"])
@@ -811,12 +830,38 @@ with left_col:
         and required_images_ready
     )
 
-    if st.button(
+    pending = st.session_state.get("lm_pending_load")
+    if pending and (pending["model"] != model or pending["url"] != lm_url):
+        st.session_state.pop("lm_pending_load", None)
+        pending = None
+
+    approved_instances = None
+    confirmed = False
+    if pending:
+        instances = pending["instances"]
+        names = ", ".join(f"{item.model} ({item.instance_id})" for item in instances)
+        if len(instances) > 1:
+            st.warning(f"Multiple LM Studio model instances are already loaded: {names}.")
+        else:
+            st.warning(f"LM Studio already has a different model loaded: {names}.")
+        st.write(f"Unload these instances first, then load {model} and generate the prompt?")
+        yes, no = st.columns(2)
+        if yes.button("Unload and continue", disabled=not can_generate):
+            approved_instances = instances
+            confirmed = True
+            st.session_state.pop("lm_pending_load", None)
+        if no.button("Cancel new load"):
+            st.session_state.pop("lm_pending_load", None)
+            st.info("New load cancelled. Existing models were left loaded.")
+            pending = None
+
+    generate_clicked = st.button(
         "Generate H3 prompt",
         type="primary",
-        disabled=not can_generate,
+        disabled=not can_generate or bool(pending),
         use_container_width=True,
-    ):
+    )
+    if generate_clicked or confirmed:
         try:
             h3_mode = workflow_mapping["h3_mode"]
             has_image = bool(image_uploads)
@@ -837,7 +882,7 @@ with left_col:
 
             with st.spinner(f"{model} is loading in LM Studio…"):
                 instance_id = run_with_live_gpu(
-                    lambda: lm_client.load_model(model),
+                    lambda: lm_client.load_model(model, approved_instances=approved_instances),
                     interval=1.0,
                 )
 
@@ -857,6 +902,8 @@ with left_col:
                     interval=1.0,
                 )
 
+            st.session_state.final_prompt_editor = generated.text
+            st.session_state.prompt_source_model = generated.model
             st.session_state.prompt = generated.text
             st.session_state.model_instance_id = generated.instance_id or instance_id
             st.session_state.model_name = generated.model
@@ -877,6 +924,11 @@ with left_col:
             st.session_state.model_instance_id = None
             st.success("Prompt ready. LM Studio model has been unloaded.")
 
+        except ModelLoadConfirmationRequired as exc:
+            st.session_state.lm_pending_load = {
+                "model": model, "url": lm_url, "instances": exc.instances,
+            }
+            st.rerun()
         except (LMStudioError, ValueError) as exc:
             st.error(str(exc))
 
@@ -889,7 +941,7 @@ with left_col:
 
     edited_prompt = st.text_area(
         "Final prompt",
-        value=st.session_state.get("prompt", ""),
+        key="final_prompt_editor",
         height=280,
     )
 
@@ -919,6 +971,25 @@ with left_col:
 
             st.success("Prompt approved.")
             st.rerun()
+
+    if st.button(
+        "Save approved prompt",
+        disabled=not (edited_prompt.strip() and st.session_state.prompt_approved),
+        use_container_width=True,
+    ):
+        try:
+            saved = PromptLibrary(ROOT / "data" / "prompt_library.sqlite3").save(
+                edited_prompt, approved=st.session_state.prompt_approved,
+                model=st.session_state.get("prompt_source_model", ""),
+                workflow=selected_workflow_path.name if selected_workflow_path else "",
+                prompt_type=workflow_mapping.get("h3_mode", "") if workflow_mapping else "",
+            )
+            if saved:
+                st.success("Approved prompt saved to Prompt Library.")
+            else:
+                st.info("This prompt is already saved with the same metadata.")
+        except (OSError, sqlite3.Error, ValueError):
+            st.error("Could not save the prompt. Check disk space and folder permissions, then try again.")
 
     # -----------------------------------------------------
     # Workflow laden en configureren
