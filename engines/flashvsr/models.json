@@ -1,0 +1,18 @@
+{
+  "FlashVSR_v1.1_lq_proj_bf16.safetensors": {
+    "sha256": "b6b98d11ff78202d88bdb06bd9fc3b6e5c76dde18ac9a59922c16e194807b998",
+    "url": "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/FlashVSR/FlashVSR_v1.1_lq_proj_bf16.safetensors"
+  },
+  "FlashVSR_v1.1_posi_prompt_bf16.safetensors": {
+    "sha256": "18ef7c04916beb5e90326e273b23163f1e910763955238745e7b2c51ffa4055d",
+    "url": "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/FlashVSR/FlashVSR_v1.1_posi_prompt_bf16.safetensors"
+  },
+  "FlashVSR_v1.1_tcdecoder_bf16.safetensors": {
+    "sha256": "904ba20f8fc29603672e55effebcda147a5f1df07e1ba2b949c4af7212739963",
+    "url": "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/FlashVSR/FlashVSR_v1.1_tcdecoder_bf16.safetensors"
+  },
+  "FlashVSR_v1.1_transformer_bf16.safetensors": {
+    "sha256": "de9e46d66b7248425ebf52088440f553bb0ecb74b0daa37929be9932cfce8105",
+    "url": "https://huggingface.co/DeepBeepMeep/Wan2.1/resolve/main/FlashVSR/FlashVSR_v1.1_transformer_bf16.safetensors"
+  }
+}

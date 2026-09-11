@@ -48,3 +48,8 @@ Desktop.ini
 *.bak
 *.tmp
 *~
+# Isolated FlashVSR runtime
+engines/flashvsr/env_venv/
+engines/flashvsr/models/
+engines/flashvsr/.setup.lock
+config/flashvsr.json

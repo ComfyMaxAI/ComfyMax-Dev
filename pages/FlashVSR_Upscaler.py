@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import queue
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import streamlit as st
+from modules.flashvsr_paths import output_directory, reserve_output
 
 from modules.flashvsr_client import (
     FlashVSRError,
@@ -27,7 +29,7 @@ CONFIG_PATH = CONFIG_DIR / "flashvsr.json"
 APP_CONFIG_PATH = CONFIG_DIR / "app.json"
 APP_CONFIG_EXAMPLE_PATH = CONFIG_DIR / "app.example.json"
 
-DEFAULT_ENGINE_DIR = r"D:\ComfyMax-FlashVSR"
+DEFAULT_ENGINE_DIR = str(ROOT / "engines" / "flashvsr")
 DEFAULT_LM_URL = "http://127.0.0.1:1234/v1"
 DEFAULT_COMFY_URL = "http://127.0.0.1:8188"
 
@@ -305,29 +307,29 @@ app_config = load_app_config()
 with st.sidebar:
     st.header("FlashVSR")
 
-    engine_dir = st.text_input(
-        "FlashVSR engine folder",
-        value=config.get("engine_dir", DEFAULT_ENGINE_DIR),
-        help="Folder containing env_venv, flashvsr, models and flashvsr_worker.py.",
-    )
-
-    save_col, test_col = st.columns(2)
-
-    with save_col:
-        if st.button("Save path", use_container_width=True):
-            try:
-                save_config({"engine_dir": engine_dir.strip()})
-                st.success("Saved.")
-            except OSError as exc:
-                st.error(f"Could not save configuration: {exc}")
-
-    with test_col:
-        if st.button("Test", use_container_width=True):
-            try:
-                validate_flashvsr_install(engine_dir)
-                st.success("FlashVSR is ready.")
-            except FlashVSRError as exc:
-                st.error(str(exc))
+    engine_dir = DEFAULT_ENGINE_DIR
+    try:
+        validate_flashvsr_install(engine_dir)
+        st.success("FlashVSR installed")
+    except FlashVSRError:
+        st.info("Install FlashVSR to enable upscaling.")
+    if st.button("Install / repair FlashVSR", use_container_width=True):
+        launcher = shutil.which("py")
+        command = ([sys.executable] if sys.version_info[:2] == (3, 11) else [launcher, "-3.11"] if launcher else None)
+        if command is None:
+            st.error("Install Python 3.11 with the Python launcher, then run Install_FlashVSR.bat.")
+        else:
+            with st.status("Installing FlashVSR; downloads may take several minutes…", expanded=True) as status:
+                log = st.empty()
+                lines = []
+                process = subprocess.Popen(command + [str(Path(engine_dir) / "installer.py")],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                    encoding="utf-8", errors="replace", cwd=engine_dir)
+                for line in process.stdout:
+                    lines.append(line.rstrip())
+                    log.code("\n".join(lines[-25:]))
+                code = process.wait()
+                status.update(label="FlashVSR installed" if code == 0 else "Installation failed; see log", state="complete" if code == 0 else "error")
 
     st.divider()
 
@@ -416,7 +418,14 @@ with left:
         "2×, Tiny-Long, automatic sparse top-k and 512 px TCDecoder tiling."
     )
 
-    can_start = uploaded is not None and bool(engine_dir.strip())
+    try:
+        destination = output_directory(ROOT)
+        st.caption(f"Save to: {destination}")
+        output_ready = True
+    except ValueError as exc:
+        st.warning(str(exc))
+        output_ready = False
+    can_start = uploaded is not None and output_ready
 
     start_clicked = st.button(
         "Start FlashVSR upscale",
@@ -465,11 +474,11 @@ if start_clicked and uploaded is not None:
         st.stop()
 
     engine_root = Path(engine_dir).expanduser().resolve()
-    engine_output_dir = engine_root / "output"
+    engine_output_dir = output_directory(ROOT)
     engine_output_dir.mkdir(parents=True, exist_ok=True)
 
     output_name = safe_output_name(uploaded.name)
-    final_output = engine_output_dir / output_name
+    final_output = reserve_output(engine_output_dir, output_name)
 
     suffix = Path(uploaded.name).suffix or ".mp4"
     temp_input_path = None
@@ -506,7 +515,7 @@ if start_clicked and uploaded is not None:
         if event_type == "log":
             log_lines.append(str(payload))
             del log_lines[:-30]
-            log_slot.code("\\n".join(log_lines), language="text")
+            log_slot.code("\n".join(log_lines), language="text")
 
     try:
         with tempfile.NamedTemporaryFile(
@@ -559,6 +568,8 @@ if start_clicked and uploaded is not None:
         st.error(str(exc))
 
     finally:
+        if final_output.exists() and final_output.stat().st_size == 0:
+            final_output.unlink()
         if temp_input_path is not None:
             try:
                 temp_input_path.unlink(missing_ok=True)
