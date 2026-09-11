@@ -25,33 +25,12 @@ from modules.flashvsr_client import (
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = ROOT / "config"
-CONFIG_PATH = CONFIG_DIR / "flashvsr.json"
 APP_CONFIG_PATH = CONFIG_DIR / "app.json"
 APP_CONFIG_EXAMPLE_PATH = CONFIG_DIR / "app.example.json"
 
 DEFAULT_ENGINE_DIR = str(ROOT / "engines" / "flashvsr")
 DEFAULT_LM_URL = "http://127.0.0.1:1234/v1"
 DEFAULT_COMFY_URL = "http://127.0.0.1:8188"
-
-
-def load_config() -> dict:
-    if not CONFIG_PATH.is_file():
-        return {"engine_dir": DEFAULT_ENGINE_DIR}
-    try:
-        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"engine_dir": DEFAULT_ENGINE_DIR}
-    if not isinstance(data, dict):
-        return {"engine_dir": DEFAULT_ENGINE_DIR}
-    return {"engine_dir": str(data.get("engine_dir") or DEFAULT_ENGINE_DIR)}
-
-
-def save_config(data: dict) -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
 
 
 def load_app_config() -> dict:
@@ -301,7 +280,6 @@ st.caption(
     "The current integration uses 2× upscale and preserves the original audio."
 )
 
-config = load_config()
 app_config = load_app_config()
 
 with st.sidebar:
@@ -575,3 +553,4 @@ if start_clicked and uploaded is not None:
                 temp_input_path.unlink(missing_ok=True)
             except OSError:
                 pass
+

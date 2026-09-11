@@ -9,19 +9,12 @@ echo            ComfyMax Startup
 echo ==========================================
 echo.
 
-REM --- Select Python: prefer local .venv, otherwise use Python on PATH ---
-if exist ".venv\Scripts\python.exe" (
-    set "PYTHON=.venv\Scripts\python.exe"
-) else (
-    where python >nul 2>nul
-    if errorlevel 1 (
-        echo [ERROR] Python was not found.
-        echo Install Python or create a .venv in this folder first.
-        pause
-        exit /b 1
-    )
-    set "PYTHON=python"
+REM --- Keep the UI in its own environment ---
+if not exist ".venv\Scripts\python.exe" (
+    call Setup_ComfyMax.bat
+    if errorlevel 1 exit /b 1
 )
+set "PYTHON=.venv\Scripts\python.exe"
 
 REM --- Check whether App.py exists ---
 if not exist "App.py" (
@@ -53,11 +46,10 @@ if errorlevel 1 (
 
 echo [OK] Starting ComfyMax...
 echo.
-"%PYTHON%" -m streamlit run App.py
-              --server.adress 0.0.0.0
-			  --server.port 8501
+"%PYTHON%" -m streamlit run App.py --server.port 8501
 
 echo.
 echo ComfyMax has been closed.
 pause
 endlocal
+
