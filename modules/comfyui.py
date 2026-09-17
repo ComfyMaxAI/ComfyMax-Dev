@@ -12,6 +12,10 @@ class ComfyUIError(RuntimeError):
     """Readable error raised for workflow or ComfyUI failures."""
 
 
+class ComfyRenderError(ComfyUIError):
+    """Raised when ComfyUI completes without the expected render output."""
+
+
 def load_api_workflow(raw: bytes | str) -> dict[str, Any]:
     try:
         workflow = json.loads(raw)
@@ -53,24 +57,84 @@ class ComfyUIClient:
         self.timeout = timeout
         self.client_id = str(uuid4())
 
-    def upload_image(self, name: str, content: bytes, content_type: str | None) -> str:
+    def upload_input_file(
+        self,
+        name: str,
+        content: bytes,
+        content_type: str | None,
+        *,
+        media_type: str = "file",
+    ) -> str:
+        """
+        Upload an input file through ComfyUI's standard upload endpoint.
+
+        ComfyUI's /upload/image endpoint stores arbitrary multipart input files
+        in the input directory. Loader nodes receive the returned relative name.
+        """
         try:
             response = requests.post(
                 f"{self.base_url}/upload/image",
-                files={"image": (name, content, content_type or "application/octet-stream")},
+                files={
+                    "image": (
+                        name,
+                        content,
+                        content_type or "application/octet-stream",
+                    )
+                },
                 data={"type": "input", "overwrite": "false"},
-                timeout=self.timeout,
+                timeout=max(self.timeout, 120),
             )
             response.raise_for_status()
             data = response.json()
         except requests.RequestException as exc:
-            detail = getattr(exc.response, "text", "") if exc.response is not None else ""
-            raise ComfyUIError(f"The image could not be uploaded to ComfyUI. {detail or exc}") from exc
+            detail = (
+                getattr(exc.response, "text", "")
+                if exc.response is not None
+                else ""
+            )
+            raise ComfyUIError(
+                f"The {media_type} could not be uploaded to ComfyUI. "
+                f"{detail or exc}"
+            ) from exc
+
         uploaded_name = data.get("name")
         if not uploaded_name:
-            raise ComfyUIError("ComfyUI did not confirm the image upload.")
+            raise ComfyUIError(
+                f"ComfyUI did not confirm the {media_type} upload."
+            )
+
         subfolder = data.get("subfolder", "")
         return f"{subfolder}/{uploaded_name}" if subfolder else uploaded_name
+
+    def upload_image(
+        self,
+        name: str,
+        content: bytes,
+        content_type: str | None,
+    ) -> str:
+        return self.upload_input_file(
+            name, content, content_type, media_type="image"
+        )
+
+    def upload_video(
+        self,
+        name: str,
+        content: bytes,
+        content_type: str | None,
+    ) -> str:
+        return self.upload_input_file(
+            name, content, content_type, media_type="video"
+        )
+
+    def upload_audio(
+        self,
+        name: str,
+        content: bytes,
+        content_type: str | None,
+    ) -> str:
+        return self.upload_input_file(
+            name, content, content_type, media_type="audio"
+        )
 
     def queue_prompt(self, workflow: dict[str, Any]) -> str:
         try:

@@ -20,6 +20,7 @@ from modules.flashvsr_client import (
     FlashVSRProgress,
     run_flashvsr,
     validate_flashvsr_install,
+    flashvsr_install_status,
 )
 
 
@@ -286,18 +287,26 @@ with st.sidebar:
     st.header("FlashVSR")
 
     engine_dir = DEFAULT_ENGINE_DIR
-    try:
-        validate_flashvsr_install(engine_dir)
-        st.success("FlashVSR installed")
-    except FlashVSRError:
-        st.info("Install FlashVSR to enable upscaling.")
-    if st.button("Install / repair FlashVSR", use_container_width=True):
+    install_status = flashvsr_install_status(engine_dir)
+
+    if install_status["runtime_ready"]:
+        st.success("Runtime: Ready")
+    else:
+        st.warning("Runtime: Not installed")
+
+    if install_status["models_ready"]:
+        st.success("Models: Ready")
+    else:
+        st.info("Models: Not installed")
+        st.caption("Run Download_FlashVSR_Models.bat from the ComfyMax folder to install the optional models.")
+
+    if st.button("Install / repair FlashVSR runtime", use_container_width=True):
         launcher = shutil.which("py")
         command = ([sys.executable] if sys.version_info[:2] == (3, 11) else [launcher, "-3.11"] if launcher else None)
         if command is None:
             st.error("Install Python 3.11 with the Python launcher, then run Install_FlashVSR.bat.")
         else:
-            with st.status("Installing FlashVSR; downloads may take several minutes…", expanded=True) as status:
+            with st.status("Installing FlashVSR runtime…", expanded=True) as status:
                 log = st.empty()
                 lines = []
                 process = subprocess.Popen(command + [str(Path(engine_dir) / "installer.py")],
@@ -307,7 +316,9 @@ with st.sidebar:
                     lines.append(line.rstrip())
                     log.code("\n".join(lines[-25:]))
                 code = process.wait()
-                status.update(label="FlashVSR installed" if code == 0 else "Installation failed; see log", state="complete" if code == 0 else "error")
+                status.update(label="FlashVSR runtime ready" if code == 0 else "Runtime installation failed; see log", state="complete" if code == 0 else "error")
+                if code == 0:
+                    st.rerun()
 
     st.divider()
 

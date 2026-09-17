@@ -4,24 +4,15 @@ pushd "%~dp0"
 if errorlevel 1 exit /b 1
 
 echo ==========================================
-echo ComfyMax - optional FlashVSR v1.1 setup
+echo ComfyMax - FlashVSR runtime setup
 echo ==========================================
 echo.
-REM Keep dependency installation, model hashes and locking in the existing installer.
-REM The runtime needs the Wan2GP BF16 conversions, not renamed upstream checkpoints.
-echo Runtime: FlashVSR v1.1 Tiny-Long, 2x
-echo Model folder: "%CD%\engines\flashvsr\models"
-echo Compatible models: https://huggingface.co/DeepBeepMeep/Wan2.1/tree/main/FlashVSR
-echo Upstream: https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1
-echo.
-echo Normal setup installs the isolated environment and downloads missing models.
-echo Existing models are checked with SHA-256 and reused when valid.
-echo --check verifies the installation without installing or downloading.
-echo --models-from "folder" reuses local model files after verification.
+echo This installs or repairs the isolated FlashVSR runtime only.
+echo FlashVSR model files are installed separately with:
+echo Download_FlashVSR_Models.bat
 echo.
 
 if not exist "engines\flashvsr\installer.py" goto missing_files
-if not exist "engines\flashvsr\models.json" goto missing_files
 if not exist "engines\flashvsr\requirements.lock.txt" goto missing_files
 if not exist "engines\flashvsr\check_install.py" goto missing_files
 if not exist "engines\flashvsr\flashvsr_worker.py" goto missing_files
@@ -34,10 +25,8 @@ set "FLASHVSR_EXIT=%ERRORLEVEL%"
 if not "%FLASHVSR_EXIT%"=="0" goto setup_failed
 
 echo.
-echo FlashVSR command completed successfully.
-echo For an installation check, run install_FlashVSR.bat --check.
-echo Before upscaling, save your existing ComfyUI output folder in Settings.
-echo Upscaled videos will be saved beneath it in videos\upscaled.
+echo FlashVSR runtime is ready.
+echo To install the optional model files, run Download_FlashVSR_Models.bat.
 popd
 pause
 exit /b 0
@@ -55,9 +44,7 @@ set "FLASHVSR_EXIT=1"
 goto failed
 
 :setup_failed
-echo [ERROR] FlashVSR setup or verification failed. Review the messages above.
-echo Resolve the reported dependency, download, checksum or GPU error and retry.
-echo See README.md for troubleshooting.
+echo [ERROR] FlashVSR runtime setup or verification failed. Review the messages above.
 
 :failed
 popd

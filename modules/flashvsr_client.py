@@ -50,11 +50,20 @@ def _parse_result_line(line: str) -> Path | None:
     return Path(value) if value else None
 
 
-def validate_flashvsr_install(engine_dir: str | Path) -> dict[str, Path]:
+def flashvsr_install_status(engine_dir: str | Path) -> dict:
     root = Path(engine_dir).expanduser().resolve()
     python_exe = root / "env_venv" / "Scripts" / "python.exe"
     worker = root / "flashvsr_worker.py"
+    manifest_path = root / "models.json"
     model_dir = root / "models"
+
+    runtime_missing = []
+    if not root.is_dir():
+        runtime_missing.append(f"Engine folder: {root}")
+    if not python_exe.is_file():
+        runtime_missing.append(f"Python environment: {python_exe}")
+    if not worker.is_file():
+        runtime_missing.append(f"Worker script: {worker}")
 
     required_models = [
         "FlashVSR_v1.1_transformer_bf16.safetensors",
@@ -62,35 +71,51 @@ def validate_flashvsr_install(engine_dir: str | Path) -> dict[str, Path]:
         "FlashVSR_v1.1_posi_prompt_bf16.safetensors",
         "FlashVSR_v1.1_tcdecoder_bf16.safetensors",
     ]
+    if manifest_path.is_file():
+        try:
+            import json
+            required_models = list(json.loads(manifest_path.read_text(encoding="utf-8")).keys())
+        except (OSError, ValueError, TypeError):
+            pass
 
-    missing: list[str] = []
-
-    if not root.is_dir():
-        missing.append(f"Engine folder: {root}")
-    if not python_exe.is_file():
-        missing.append(f"Python environment: {python_exe}")
-    if not worker.is_file():
-        missing.append(f"Worker script: {worker}")
-
-    for model_name in required_models:
-        model_path = model_dir / model_name
-        if not model_path.is_file():
-            missing.append(f"Model: {model_path}")
-
-    if missing:
-        details = "\n".join(f"- {item}" for item in missing)
-        raise FlashVSRError(
-            "FlashVSR installation is incomplete.\n\n"
-            f"{details}"
-        )
+    missing_models = [name for name in required_models if not (model_dir / name).is_file()]
 
     return {
         "root": root,
         "python": python_exe,
         "worker": worker,
         "models": model_dir,
+        "runtime_ready": not runtime_missing,
+        "models_ready": not missing_models,
+        "runtime_missing": runtime_missing,
+        "missing_models": missing_models,
     }
 
+
+def validate_flashvsr_runtime(engine_dir: str | Path) -> dict[str, Path]:
+    status = flashvsr_install_status(engine_dir)
+    if not status["runtime_ready"]:
+        details = "\n".join(f"- {item}" for item in status["runtime_missing"])
+        raise FlashVSRError("FlashVSR runtime is not installed.\n\n" + details)
+    return {
+        "root": status["root"],
+        "python": status["python"],
+        "worker": status["worker"],
+        "models": status["models"],
+    }
+
+
+def validate_flashvsr_install(engine_dir: str | Path) -> dict[str, Path]:
+    install = validate_flashvsr_runtime(engine_dir)
+    status = flashvsr_install_status(engine_dir)
+    if not status["models_ready"]:
+        details = "\n".join(f"- {name}" for name in status["missing_models"])
+        raise FlashVSRError(
+            "FlashVSR runtime is ready, but the optional models are not installed.\n\n"
+            "Run Download_FlashVSR_Models.bat from the ComfyMax folder.\n\n"
+            "Missing models:\n" + details
+        )
+    return install
 
 def run_flashvsr(
     engine_dir: str | Path,

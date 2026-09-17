@@ -421,7 +421,7 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("ComfyMax v0.2")
+st.title("ComfyMax v0.4")
 st.caption(
     "From idea to a reviewed MiniMax H3 prompt, then on to ComfyUI."
 )
@@ -594,6 +594,8 @@ with left_col:
 
     field_values: dict[str, object] = {}
     image_uploads: dict[str, object] = {}
+    video_uploads: dict[str, object] = {}
+    audio_uploads: dict[str, object] = {}
 
     # -----------------------------------------------------
     # Compacte hoofdinstellingen
@@ -603,6 +605,8 @@ with left_col:
     compact_fields: list[tuple[str, dict]] = []
     extra_fields: list[tuple[str, dict]] = []
     image_fields: list[tuple[str, dict]] = []
+    video_fields: list[tuple[str, dict]] = []
+    audio_fields: list[tuple[str, dict]] = []
     model_setting_fields: list[tuple[str, dict]] = []
 
     if workflow_mapping:
@@ -615,6 +619,10 @@ with left_col:
                 model_setting_fields.append((field_name, rule))
             elif field_type == "image":
                 image_fields.append((field_name, rule))
+            elif field_type == "video":
+                video_fields.append((field_name, rule))
+            elif field_type == "audio":
+                audio_fields.append((field_name, rule))
             elif field_name in compact_names:
                 compact_fields.append((field_name, rule))
             else:
@@ -773,30 +781,67 @@ with left_col:
                     )
 
     # -----------------------------------------------------
-    # Reference images
+    # Reference media
     # -----------------------------------------------------
 
     if image_fields:
         st.markdown("##### Reference images")
         image_columns = st.columns(min(len(image_fields), 3))
-
         for index, (field_name, rule) in enumerate(image_fields):
             with image_columns[index % len(image_columns)]:
                 label = rule.get("label", field_name.replace("_", " ").title())
                 uploaded = st.file_uploader(
                     label,
-                    type=["png", "jpg", "jpeg", "webp"],
+                    type=["png", "jpg", "jpeg", "webp", "bmp"],
                     key=f"{workflow_key_prefix}_{field_name}",
                 )
-
                 if uploaded:
                     image_uploads[field_name] = uploaded
                     field_values[field_name] = uploaded.name
                     st.image(uploaded, width=160)
 
+    if video_fields:
+        st.markdown("##### Reference videos")
+        video_columns = st.columns(min(len(video_fields), 2))
+        for index, (field_name, rule) in enumerate(video_fields):
+            with video_columns[index % len(video_columns)]:
+                label = rule.get("label", field_name.replace("_", " ").title())
+                uploaded = st.file_uploader(
+                    label,
+                    type=["mp4", "webm", "mov", "avi", "mkv", "m4v"],
+                    key=f"{workflow_key_prefix}_{field_name}",
+                )
+                if uploaded:
+                    video_uploads[field_name] = uploaded
+                    field_values[field_name] = uploaded.name
+                    st.video(uploaded.getvalue())
+
+    if audio_fields:
+        st.markdown("##### Reference audio")
+        audio_columns = st.columns(min(len(audio_fields), 2))
+        for index, (field_name, rule) in enumerate(audio_fields):
+            with audio_columns[index % len(audio_columns)]:
+                label = rule.get("label", field_name.replace("_", " ").title())
+                uploaded = st.file_uploader(
+                    label,
+                    type=["wav", "mp3", "flac", "ogg", "m4a", "aac", "opus"],
+                    key=f"{workflow_key_prefix}_{field_name}",
+                )
+                if uploaded:
+                    audio_uploads[field_name] = uploaded
+                    field_values[field_name] = uploaded.name
+                    st.audio(uploaded.getvalue(), format=uploaded.type)
+
     required_image_fields = [name for name, _ in image_fields]
-    required_images_ready = bool(workflow_mapping) and all(
+    required_video_fields = [name for name, _ in video_fields]
+    required_audio_fields = [name for name, _ in audio_fields]
+
+    required_media_ready = bool(workflow_mapping) and all(
         name in image_uploads for name in required_image_fields
+    ) and all(
+        name in video_uploads for name in required_video_fields
+    ) and all(
+        name in audio_uploads for name in required_audio_fields
     )
 
     # -----------------------------------------------------
@@ -829,7 +874,7 @@ with left_col:
         idea.strip()
         and model
         and workflow_mapping
-        and required_images_ready
+        and required_media_ready
     )
 
     pending = st.session_state.get("lm_pending_load")
@@ -866,7 +911,10 @@ with left_col:
     if generate_clicked or confirmed:
         try:
             h3_mode = workflow_mapping["h3_mode"]
-            has_image = bool(image_uploads)
+            has_image = any(
+                ((getattr(uploaded, "type", "") or "").lower()).startswith("image/")
+                for uploaded in image_uploads.values()
+            )
             target_duration = field_values.get("duration")
             system_prompt = get_h3_system_prompt(
                 mode=h3_mode,
@@ -878,9 +926,21 @@ with left_col:
             for field_name, rule in workflow_mapping.get("fields", {}).items():
                 if str(rule.get("type", "")).lower() != "image":
                     continue
+
                 uploaded = image_uploads.get(field_name)
-                if uploaded is not None:
-                    enhancer_images.append((uploaded.getvalue(), uploaded.type))
+                if uploaded is None:
+                    continue
+
+                content_type = (getattr(uploaded, "type", "") or "").lower()
+
+                # LM Studio vision must receive images only.
+                # Video, audio and unknown MIME types are never forwarded.
+                if not content_type.startswith("image/"):
+                    continue
+
+                enhancer_images.append(
+                    (uploaded.getvalue(), uploaded.type)
+                )
 
             with st.spinner(f"{model} is loading in LM Studio…"):
                 instance_id = run_with_live_gpu(
@@ -935,8 +995,16 @@ with left_col:
         except (LMStudioError, ValueError) as exc:
             st.error(str(exc))
 
-    if workflow_mapping and required_image_fields and not required_images_ready:
-        st.info("Upload all required reference images first.")
+    if workflow_mapping and not required_media_ready:
+        missing_groups = []
+        if any(name not in image_uploads for name in required_image_fields):
+            missing_groups.append("reference images")
+        if any(name not in video_uploads for name in required_video_fields):
+            missing_groups.append("reference videos")
+        if any(name not in audio_uploads for name in required_audio_fields):
+            missing_groups.append("reference audio")
+        if missing_groups:
+            st.info("Upload all required " + ", ".join(missing_groups) + " first.")
 
     # -----------------------------------------------------
     # Promptcontrole
@@ -1031,7 +1099,7 @@ with left_col:
         and workflow
         and workflow_mapping
         and edited_prompt.strip()
-        and required_images_ready
+        and required_media_ready
         and st.session_state.get("model_unloaded")
         and st.session_state.get("prompt_approved")
         and edited_prompt == st.session_state.get("approved_prompt_text", "")
@@ -1054,7 +1122,7 @@ with left_col:
 
     if render_clicked:
         try:
-            with st.spinner("Uploading images and sending workflow to ComfyUI…"):
+            with st.spinner("Uploading media and sending workflow to ComfyUI…"):
                 final_values = dict(field_values)
 
                 if "seed" in final_values and int(final_values["seed"]) == 0:
@@ -1062,6 +1130,20 @@ with left_col:
 
                 for field_name, uploaded in image_uploads.items():
                     final_values[field_name] = comfy_client.upload_image(
+                        uploaded.name,
+                        uploaded.getvalue(),
+                        uploaded.type,
+                    )
+
+                for field_name, uploaded in video_uploads.items():
+                    final_values[field_name] = comfy_client.upload_video(
+                        uploaded.name,
+                        uploaded.getvalue(),
+                        uploaded.type,
+                    )
+
+                for field_name, uploaded in audio_uploads.items():
+                    final_values[field_name] = comfy_client.upload_audio(
                         uploaded.name,
                         uploaded.getvalue(),
                         uploaded.type,

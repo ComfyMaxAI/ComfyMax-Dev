@@ -1,0 +1,5 @@
+{
+  "video_style": ["Hip Hop", "Romantic", "Pop", "Rock", "Cinematic", "Dark", "Dreamy", "Performance", "Narrative", "Experimental"],
+  "artist_action": ["Standing still", "Walking down the street", "Walking toward camera", "Walking away from camera", "Sitting", "Dancing", "Singing to camera", "Looking out a window", "Driving a car", "Entering a building", "Talking to another person"],
+  "camera_action": ["Static camera", "Slow zoom in", "Slow zoom out", "Camera follows artist", "Tracking shot", "Dolly in", "Dolly out", "Pan left", "Pan right", "Orbit around artist", "Handheld camera", "Close-up"]
+}

@@ -195,6 +195,44 @@ IMAGE_CLASS_HINTS = [
     "image input",
 ]
 
+VIDEO_INPUT_NAMES = [
+    "video",
+    "reference_video",
+    "ref_video",
+    "input_video",
+    "source_video",
+    "video_path",
+    "video_file",
+]
+
+VIDEO_CLASS_HINTS = [
+    "loadvideo",
+    "video loader",
+    "videoinput",
+    "video input",
+    "vhs_loadvideo",
+    "vhsloadvideo",
+]
+
+AUDIO_INPUT_NAMES = [
+    "audio",
+    "reference_audio",
+    "ref_audio",
+    "input_audio",
+    "source_audio",
+    "audio_path",
+    "audio_file",
+    "sound",
+]
+
+AUDIO_CLASS_HINTS = [
+    "loadaudio",
+    "audio loader",
+    "audioinput",
+    "audio input",
+    "sound loader",
+]
+
 
 # ============================================================
 # Datatypes
@@ -501,6 +539,176 @@ def image_candidates(workflow: dict[str, Any]) -> list[Candidate]:
     return found
 
 
+
+def media_candidates(
+    workflow: dict[str, Any],
+    *,
+    media_name: str,
+    input_names: list[str],
+    class_hints: list[str],
+    extensions: tuple[str, ...],
+) -> list[Candidate]:
+    """Detect editable video/audio inputs using names, class hints and filenames."""
+    found: list[Candidate] = []
+
+    for candidate in all_editable_candidates(workflow):
+        input_lower = candidate.input_name.lower()
+        class_lower = candidate.class_type.lower()
+
+        score = 0
+        reasons: list[str] = []
+
+        if input_lower in input_names:
+            score += 60
+            reasons.append(
+                f"input '{candidate.input_name}' looks like {media_name}"
+            )
+
+        for hint in class_hints:
+            if hint in class_lower:
+                score += 30
+                reasons.append(
+                    f"class looks like {media_name} loader ({hint})"
+                )
+                break
+
+        if isinstance(candidate.value, str):
+            lower_value = candidate.value.lower()
+            if lower_value.endswith(extensions):
+                score += 25
+                reasons.append(
+                    f"value looks like {media_name} filename"
+                )
+
+        if score > 0:
+            found.append(
+                Candidate(
+                    node_id=candidate.node_id,
+                    class_type=candidate.class_type,
+                    input_name=candidate.input_name,
+                    value=candidate.value,
+                    score=score,
+                    reason=", ".join(reasons),
+                )
+            )
+
+    found.sort(
+        key=lambda item: (
+            item.score,
+            numeric_sort_key(item.node_id),
+            item.input_name,
+        ),
+        reverse=True,
+    )
+    return found
+
+
+def _has_media_semantic_match(
+    candidate: Candidate,
+    input_names: list[str],
+    class_hints: list[str],
+) -> bool:
+    """Return True when the node/input itself clearly identifies a media type."""
+    input_lower = candidate.input_name.lower()
+    class_lower = candidate.class_type.lower()
+
+    if input_lower in input_names:
+        return True
+
+    return any(hint in class_lower for hint in class_hints)
+
+
+def _filter_extension_only_conflicts(
+    candidates: list[Candidate],
+    workflow: dict[str, Any],
+    *,
+    own_input_names: list[str],
+    own_class_hints: list[str],
+    competing_input_names: list[str],
+    competing_class_hints: list[str],
+) -> list[Candidate]:
+    """
+    Do not let a filename extension override the semantic meaning of a node.
+
+    Example:
+        LoadAudio -> input 'audio' -> value 'clip.mp4'
+
+    The MP4 container makes the filename look like video, but the ComfyUI node
+    explicitly treats it as audio. In that case it must remain an audio input
+    and must not also be classified as video merely because of '.mp4'.
+    """
+    editable_by_key = {
+        (candidate.node_id, candidate.input_name): candidate
+        for candidate in all_editable_candidates(workflow)
+    }
+
+    filtered: list[Candidate] = []
+
+    for candidate in candidates:
+        key = (candidate.node_id, candidate.input_name)
+        raw_candidate = editable_by_key.get(key, candidate)
+
+        own_semantic = _has_media_semantic_match(
+            raw_candidate,
+            own_input_names,
+            own_class_hints,
+        )
+        competing_semantic = _has_media_semantic_match(
+            raw_candidate,
+            competing_input_names,
+            competing_class_hints,
+        )
+
+        # If this candidate only entered the current media category because of
+        # its filename extension, while node/input semantics clearly identify
+        # the competing media type, discard it from the current category.
+        if competing_semantic and not own_semantic:
+            continue
+
+        filtered.append(candidate)
+
+    return filtered
+
+
+def video_candidates(workflow: dict[str, Any]) -> list[Candidate]:
+    candidates = media_candidates(
+        workflow,
+        media_name="video",
+        input_names=VIDEO_INPUT_NAMES,
+        class_hints=VIDEO_CLASS_HINTS,
+        extensions=(".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v"),
+    )
+
+    return _filter_extension_only_conflicts(
+        candidates,
+        workflow,
+        own_input_names=VIDEO_INPUT_NAMES,
+        own_class_hints=VIDEO_CLASS_HINTS,
+        competing_input_names=AUDIO_INPUT_NAMES,
+        competing_class_hints=AUDIO_CLASS_HINTS,
+    )
+
+
+def audio_candidates(workflow: dict[str, Any]) -> list[Candidate]:
+    candidates = media_candidates(
+        workflow,
+        media_name="audio",
+        input_names=AUDIO_INPUT_NAMES,
+        class_hints=AUDIO_CLASS_HINTS,
+        extensions=(".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus"),
+    )
+
+    return _filter_extension_only_conflicts(
+        candidates,
+        workflow,
+        own_input_names=AUDIO_INPUT_NAMES,
+        own_class_hints=AUDIO_CLASS_HINTS,
+        competing_input_names=VIDEO_INPUT_NAMES,
+        competing_class_hints=VIDEO_CLASS_HINTS,
+    )
+
+
+
 def numeric_sort_key(value: str) -> tuple[int, str]:
     """
     Sorteert normale node IDs numeriek waar mogelijk.
@@ -657,6 +865,25 @@ def make_image_rule(
     }
 
 
+def make_media_rule(
+    candidate: Candidate,
+    index: int,
+    media_type: str,
+) -> dict[str, Any]:
+    labels = {
+        "image": "Reference image",
+        "video": "Reference video",
+        "audio": "Reference audio",
+    }
+    label = labels.get(media_type, "Reference media")
+    return {
+        "node_id": candidate.node_id,
+        "input": candidate.input_name,
+        "type": media_type,
+        "label": f"{label} {index}",
+    }
+
+
 def make_model_rule(
     candidate: Candidate,
     definition: dict[str, Any],
@@ -733,6 +960,8 @@ def compatibility_report(
     mapping: dict[str, Any],
     selected_fields: dict[str, tuple[Candidate, dict[str, Any]]],
     selected_images: list[Candidate],
+    selected_videos: list[Candidate],
+    selected_audio: list[Candidate],
     selected_models: dict[str, tuple[Candidate, dict[str, Any]]],
 ) -> dict[str, Any]:
     problems = validate_mapping(workflow, mapping)
@@ -750,6 +979,12 @@ def compatibility_report(
                 for rule in fields.values()
                 if rule.get("type") == "image"
             ]
+        ),
+        "reference_videos": len(
+            [rule for rule in fields.values() if rule.get("type") == "video"]
+        ),
+        "reference_audio": len(
+            [rule for rule in fields.values() if rule.get("type") == "audio"]
         ),
         "model_settings": len(
             [
@@ -786,6 +1021,23 @@ def compatibility_report(
                 "Score": candidate.score,
             }
         )
+
+    for media_label, selected_media in (
+        ("Reference video", selected_videos),
+        ("Reference audio", selected_audio),
+    ):
+        for index, candidate in enumerate(selected_media, start=1):
+            report["details"].append(
+                {
+                    "Field": f"{media_label} {index}",
+                    "Mapped": True,
+                    "Node": candidate.node_id,
+                    "Input": candidate.input_name,
+                    "Class": candidate.class_type,
+                    "Confidence": confidence_label(candidate.score),
+                    "Score": candidate.score,
+                }
+            )
 
     for field_name, (candidate, definition) in selected_models.items():
         report["details"].append(
@@ -1025,103 +1277,140 @@ for field_name in (
         )
 
 
-# ============================================================
-# Reference images
-# ============================================================
 
-st.subheader("4. Reference images")
+def select_reference_media(
+    *,
+    workflow: dict[str, Any],
+    media_type: str,
+    detected: list[Candidate],
+    all_editable: list[Candidate],
+    max_count: int = 20,
+) -> list[Candidate]:
+    labels = {
+        "image": ("Reference images", "image", "images"),
+        "video": ("Reference videos", "video", "videos"),
+        "audio": ("Reference audio", "audio", "audio files"),
+    }
+    heading, singular, plural = labels[media_type]
 
-detected_images = image_candidates(workflow)
+    st.subheader(heading)
 
-if detected_images:
-    st.caption(
-        f"{len(detected_images)} possible editable image input(s) detected."
+    if detected:
+        st.caption(
+            f"{len(detected)} possible editable {singular} input(s) detected."
+        )
+    else:
+        st.warning(
+            f"No obvious editable reference-{singular} inputs were detected. "
+            "You can still select them manually below."
+        )
+
+    # Keep media categories mutually exclusive. Known video/audio inputs
+    # must not appear as image fallbacks, and vice versa.
+    image_keys = {(c.node_id, c.input_name) for c in image_candidates(workflow)}
+    video_keys = {(c.node_id, c.input_name) for c in video_candidates(workflow)}
+    audio_keys = {(c.node_id, c.input_name) for c in audio_candidates(workflow)}
+
+    if media_type == "image":
+        excluded_keys = video_keys | audio_keys
+    elif media_type == "video":
+        excluded_keys = image_keys | audio_keys
+    else:
+        excluded_keys = image_keys | video_keys
+
+    option_map: dict[tuple[str, str], Candidate] = {}
+    for candidate in detected + all_editable:
+        key = (candidate.node_id, candidate.input_name)
+        if key in excluded_keys:
+            continue
+        if key not in option_map:
+            option_map[key] = candidate
+
+    options_list = list(option_map.values())
+    options_list.sort(
+        key=lambda c: (
+            c.score,
+            numeric_sort_key(c.node_id),
+            c.input_name,
+        ),
+        reverse=True,
     )
-else:
-    st.warning(
-        "No obvious editable reference-image inputs were detected. "
-        "You can still select them manually below."
+
+    suggested_count = len([c for c in detected if c.score >= 50])
+    default_count = min(
+        max(suggested_count, 1 if detected else 0),
+        9,
     )
+
+    count = st.number_input(
+        f"How many reference {plural} should ComfyMax control?",
+        min_value=0,
+        max_value=max_count,
+        value=int(default_count),
+        step=1,
+        key=f"{media_type}_reference_count",
+    )
+
+    selected_media: list[Candidate] = []
+    used_keys: set[tuple[str, str]] = set()
+
+    for index in range(1, int(count) + 1):
+        options = [none_candidate()] + options_list
+        default_index = 0
+
+        for option_index, candidate in enumerate(options_list, start=1):
+            key = (candidate.node_id, candidate.input_name)
+            if candidate.score >= 50 and key not in used_keys:
+                default_index = option_index
+                break
+
+        selected = st.selectbox(
+            f"Reference {singular} {index}",
+            options=options,
+            index=default_index,
+            format_func=lambda c: (
+                "— Not mapped —" if not c.node_id else candidate_label(c)
+            ),
+            key=f"reference_{media_type}_{index}",
+        )
+
+        if selected.node_id:
+            selected_media.append(selected)
+            used_keys.add((selected.node_id, selected.input_name))
+            if selected.score > 0:
+                st.caption(
+                    f"Suggestion score: {selected.score} · {selected.reason}"
+                )
+
+    return selected_media
+
+
+# ============================================================
+# Reference media
+# ============================================================
 
 all_editable = all_editable_candidates(workflow)
 
-# Voeg ook alle overige inputs toe als fallback zodat exotische custom nodes
-# toch handmatig gekozen kunnen worden.
-image_option_map: dict[tuple[str, str], Candidate] = {}
-
-for candidate in detected_images + all_editable:
-    key = (candidate.node_id, candidate.input_name)
-    if key not in image_option_map:
-        image_option_map[key] = candidate
-
-image_options = list(image_option_map.values())
-
-image_options.sort(
-    key=lambda c: (
-        c.score,
-        numeric_sort_key(c.node_id),
-        c.input_name,
-    ),
-    reverse=True,
+selected_images = select_reference_media(
+    workflow=workflow,
+    media_type="image",
+    detected=image_candidates(workflow),
+    all_editable=all_editable,
 )
 
-suggested_image_count = len(
-    [c for c in detected_images if c.score >= 50]
+selected_videos = select_reference_media(
+    workflow=workflow,
+    media_type="video",
+    detected=video_candidates(workflow),
+    all_editable=all_editable,
 )
 
-default_image_count = min(
-    max(suggested_image_count, 1 if detected_images else 0),
-    9,
+selected_audio = select_reference_media(
+    workflow=workflow,
+    media_type="audio",
+    detected=audio_candidates(workflow),
+    all_editable=all_editable,
 )
-
-reference_count = st.number_input(
-    "How many reference images should ComfyMax control?",
-    min_value=0,
-    max_value=20,
-    value=int(default_image_count),
-    step=1,
-)
-
-selected_images: list[Candidate] = []
-
-used_image_keys: set[tuple[str, str]] = set()
-
-for index in range(1, int(reference_count) + 1):
-    options = [none_candidate()] + image_options
-
-    default_index = 0
-
-    # Probeer voor iedere afbeelding een andere goede kandidaat te kiezen.
-    for option_index, candidate in enumerate(
-        image_options,
-        start=1,
-    ):
-        key = (candidate.node_id, candidate.input_name)
-        if candidate.score >= 50 and key not in used_image_keys:
-            default_index = option_index
-            break
-
-    selected = st.selectbox(
-        f"Reference image {index}",
-        options=options,
-        index=default_index,
-        format_func=lambda c: "— Not mapped —"
-        if not c.node_id
-        else candidate_label(c),
-        key=f"reference_image_{index}",
-    )
-
-    if selected.node_id:
-        selected_images.append(selected)
-        used_image_keys.add(
-            (selected.node_id, selected.input_name)
-        )
-
-        if selected.score > 0:
-            st.caption(
-                f"Suggestion score: {selected.score} · "
-                f"{selected.reason}"
-            )
 
 
 # ============================================================
@@ -1198,6 +1487,18 @@ for image_index, candidate in enumerate(
         )
     )
 
+# Reference videos
+for video_index, candidate in enumerate(selected_videos, start=1):
+    mapping["fields"][f"video_{video_index}"] = make_media_rule(
+        candidate, video_index, "video"
+    )
+
+# Reference audio
+for audio_index, candidate in enumerate(selected_audio, start=1):
+    mapping["fields"][f"audio_{audio_index}"] = make_media_rule(
+        candidate, audio_index, "audio"
+    )
+
 # Model settings
 for field_name, (
     candidate,
@@ -1231,10 +1532,12 @@ report = compatibility_report(
     mapping,
     selected_fields,
     selected_images,
+    selected_videos,
+    selected_audio,
     selected_models,
 )
 
-summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
+summary_col1, summary_col2, summary_col3, summary_col4, summary_col5, summary_col6 = st.columns(6)
 
 with summary_col1:
     st.metric(
@@ -1255,6 +1558,12 @@ with summary_col3:
     )
 
 with summary_col4:
+    st.metric("Reference videos", report["reference_videos"])
+
+with summary_col5:
+    st.metric("Reference audio", report["reference_audio"])
+
+with summary_col6:
     st.metric(
         "Model settings",
         report["model_settings"],
@@ -1291,6 +1600,8 @@ if not problems and not duplicate_problems:
     st.write(
         f"✅ Reference images: {report['reference_images']}"
     )
+    st.write(f"✅ Reference videos: {report['reference_videos']}")
+    st.write(f"✅ Reference audio: {report['reference_audio']}")
     st.write(
         f"✅ Model settings: {report['model_settings']}"
     )
