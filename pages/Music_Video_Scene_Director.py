@@ -19,7 +19,7 @@ from modules.music_video_director import (
 )
 from modules.music_video_ui import duration_matches, lyrics_transcription_ui, mapped_inputs, preset
 from modules.scene_workflow import (
-    check_render, completed_render, load_mapped_workflow, mapped_workflows, prompt_system, submit_mapped_workflow,
+    check_render, completed_render, load_mapped_workflow, mapped_workflows, prompt_system, submit_mapped_workflow, video_output_node_id,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -650,7 +650,7 @@ with editor:
 
             with st.spinner("ComfyUI is rendering the video…"):
                 while completed is None:
-                    completed = completed_render(comfy, prompt_id)
+                    completed = completed_render(comfy, prompt_id, output_node_id=video_output_node_id(workflow, mapping))
                     if completed is None:
                         checks += 1
                         render_progress.progress(min(95, 5 + checks))

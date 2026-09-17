@@ -92,10 +92,39 @@ def read_image(root, asset):
     return asset["name"], content, asset.get("mime")
 
 
-def check_render(client, render):
+
+def video_output_node_id(workflow, mapping=None):
+    """
+    Resolve the intended video output node.
+
+    Preferred: mapping["output_node_id"] / mapping["video_output_node_id"].
+    Fallback: a unique SaveVideo node in the API workflow.
+    """
+    mapping = mapping or {}
+    explicit = mapping.get("video_output_node_id", mapping.get("output_node_id"))
+    if explicit is not None and str(explicit).strip():
+        return str(explicit)
+
+    save_nodes = [
+        str(node_id)
+        for node_id, node in workflow.items()
+        if isinstance(node, dict) and str(node.get("class_type", "")).lower() == "savevideo"
+    ]
+    if len(save_nodes) == 1:
+        return save_nodes[0]
+    if len(save_nodes) > 1:
+        raise ValueError(
+            "This workflow contains multiple SaveVideo nodes. Add "
+            "'video_output_node_id' to its workflow mapping."
+        )
+    raise ValueError(
+        "No SaveVideo node was found. Add 'video_output_node_id' to the workflow mapping."
+    )
+
+def check_render(client, render, output_node_id=None):
     """A queue ID or a still image is never counted as a rendered video."""
     try:
-        output = client.get_completed_output(render["prompt_id"])
+        output = client.get_completed_output(render["prompt_id"], output_node_id=output_node_id)
         if output is not None:
             if Path(output["filename"]).suffix.lower() not in (".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v"):
                 raise ComfyRenderError("The workflow completed without an expected video output.")
@@ -111,9 +140,9 @@ def check_render(client, render):
 
 
 
-def completed_render(client, prompt_id):
+def completed_render(client, prompt_id, output_node_id=None):
     """Return completed ComfyUI video output plus bytes, or None while still rendering."""
-    output = client.get_completed_output(prompt_id)
+    output = client.get_completed_output(prompt_id, output_node_id=output_node_id)
     if output is None:
         return None
 

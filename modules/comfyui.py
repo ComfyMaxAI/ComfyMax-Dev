@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -172,10 +173,17 @@ class ComfyUIClient:
 
         return data
 
-    def get_completed_output(self, prompt_id: str) -> dict[str, str] | None:
+    def get_completed_output(
+        self,
+        prompt_id: str,
+        output_node_id: str | int | None = None,
+    ) -> dict[str, str] | None:
         """
-        Geeft het eerste voltooide outputbestand terug.
-        SaveVideo verschijnt in de history onder outputs -> node -> images.
+        Return a completed ComfyUI output file.
+
+        When output_node_id is supplied, only that node is inspected. This avoids
+        accidentally selecting a preview/intermediate output when a workflow has
+        multiple output nodes.
         """
         history = self.get_history(prompt_id)
         entry = history.get(prompt_id)
@@ -193,21 +201,59 @@ class ComfyUIClient:
             )
 
         outputs = entry.get("outputs", {})
-        for node_output in outputs.values():
-            for item in node_output.get("images", []):
-                filename = item.get("filename")
-                if not filename:
+        if not isinstance(outputs, dict):
+            outputs = {}
+
+        if output_node_id is not None:
+            node_id = str(output_node_id)
+            node_output = outputs.get(node_id)
+            if not isinstance(node_output, dict):
+                raise ComfyUIError(
+                    f"The render is complete, but ComfyUI reported no output for "
+                    f"the configured video output node {node_id}."
+                )
+            candidates = [(node_id, node_output)]
+        else:
+            candidates = list(outputs.items())
+
+        video_extensions = {".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v"}
+
+        for _, node_output in candidates:
+            if not isinstance(node_output, dict):
+                continue
+
+            # ComfyUI SaveVideo currently reports files through the 'images'
+            # collection. Also accept common future/alternate collection names.
+            for collection_name in ("videos", "images", "files"):
+                items = node_output.get(collection_name, [])
+                if not isinstance(items, list):
                     continue
 
-                return {
-                    "filename": filename,
-                    "subfolder": item.get("subfolder", ""),
-                    "type": item.get("type", "output"),
-                }
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    filename = item.get("filename")
+                    if not filename:
+                        continue
+                    if Path(filename).suffix.lower() not in video_extensions:
+                        continue
+
+                    return {
+                        "filename": filename,
+                        "subfolder": item.get("subfolder", ""),
+                        "type": item.get("type", "output"),
+                    }
+
+        if output_node_id is not None:
+            raise ComfyUIError(
+                f"The render is complete, but video output node {output_node_id} "
+                "reported no supported video file."
+            )
 
         raise ComfyUIError(
             "The render is complete, but ComfyUI reported no video output."
         )
+
 
     def get_used_seed(
         self,
