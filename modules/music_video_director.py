@@ -111,12 +111,20 @@ def timeline(project):
              "Status": scene_status(project, scene)} for i, scene in enumerate(project["scenes"])]
 
 
+def effective_workflow(project, scene):
+    """Resolve scene override first, then the optional project-wide workflow."""
+    state = scene[KEY]
+    settings = project[KEY]["settings"]
+    return str(state.get("workflow") or settings.get("workflow") or "")
+
+
 def signature(project, scene):
     state = scene[KEY]
     relevant = {"source": {k: v for k, v in scene.items() if k != KEY},
         "settings": project[KEY]["settings"],
-        "direction": {k: state.get(k) for k in ("artist_action", "camera_action", "notes", "workflow",
-            "inputs", "assets", "prompt", "duration_ack", "workflow_digest")}}
+        "direction": {k: state.get(k) for k in ("artist_action", "camera_action", "notes",
+            "inputs", "assets", "prompt", "duration_ack", "workflow_digest")},
+        "effective_workflow": effective_workflow(project, scene)}
     return hashlib.sha256(json.dumps(relevant, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
 
@@ -137,8 +145,10 @@ def scene_status(project, scene):
 
 
 def approve_scene(project, scene):
-    if not scene[KEY]["prompt"].strip() or not scene[KEY]["workflow"]:
-        raise ValueError("Choose a workflow and review a nonempty prompt first.")
+    if not scene[KEY]["prompt"].strip():
+        raise ValueError("Review a nonempty prompt first.")
+    if not effective_workflow(project, scene):
+        raise ValueError("Choose a project workflow or a scene workflow before approving for render.")
     scene[KEY]["approved_signature"] = signature(project, scene)
 
 
@@ -152,15 +162,13 @@ def compose_prompt(project, scene, mapping=None):
     lines = [
         f"Music video: {title(project)}",
         f"Video style: {settings['video_style']}",
-        f"Concept: {settings['concept']}",
-        f"Recurring characters: {settings['characters']}",
         f"Scene {info['number']} — {info['type'].title()}",
         f"Original song interval: {info['start']:.9f}–{info['end']:.9f} seconds; duration {info['duration']:.9f} seconds.",
         f"Requested rendered clip duration: {render_duration} seconds. Clip time starts at zero.",
         f"Artist action: {state['artist_action']}",
         f"Camera action: {state['camera_action']}",
         f"Scene direction / continuity: {state['notes']}",
-        f"Workflow: {state['workflow']}",
+        f"Workflow: {effective_workflow(project, scene)}",
     ]
 
     if mapping:

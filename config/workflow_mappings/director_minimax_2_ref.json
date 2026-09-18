@@ -39,7 +39,10 @@
       "options": [
         0.4,
         0.5,
+        0.6,
         0.7,
+        0.8,
+        0.9,
         1.0
       ]
     },
@@ -48,7 +51,7 @@
       "input": "aspect_ratio",
       "type": "select",
       "label": "Aspect ratio",
-      "default": "1:1 (Square)",
+      "default": "3:4 (Portrait Standard)",
       "options": [
         "1:1 (Square)",
         "2:3 (Portrait Photo)",
@@ -83,6 +86,12 @@
       "input": "image",
       "type": "image",
       "label": "Reference image 1"
+    },
+	"picture_2": {
+      "node_id": "139",
+      "input": "image",
+      "type": "image",
+      "label": "Reference image 2"
     },
     "audio_1": {
       "node_id": "147",

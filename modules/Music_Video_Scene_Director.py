@@ -144,29 +144,6 @@ def unload_all_lmstudio_models(lm_url):
     return len(ids)
 
 st.set_page_config(page_title="Music Video Scene Director · ComfyMax", page_icon="🎵", layout="wide")
-st.markdown(
-    """
-    <style>
-    .st-key-mvd_generate_prompt button {
-        background-color: #16a34a !important;
-        border-color: #16a34a !important;
-        color: white !important;
-        font-weight: 600 !important;
-    }
-    .st-key-mvd_generate_prompt button:hover {
-        background-color: #15803d !important;
-        border-color: #15803d !important;
-        color: white !important;
-    }
-    .st-key-mvd_generate_prompt button:disabled {
-        background-color: #166534 !important;
-        border-color: #166534 !important;
-        color: rgba(255, 255, 255, 0.65) !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
 st.title("Music Video Scene Director")
 st.caption("Import Scene Builder scenes.json, direct one scene at a time, and review every prompt before rendering.")
 st.page_link("App.py", label="Main ComfyMax generator", icon="🎬")
@@ -350,24 +327,9 @@ stats = st.empty()
 progress = st.empty()
 with st.expander("Global music video settings", expanded=True):
     global_settings["video_style"] = preset("Video style / type", global_settings["video_style"], presets["video_style"], project_key + "_style")
-
-    with st.expander("How to use this page", expanded=False):
-        st.markdown(
-            """
-            1. Import your `scenes.json` and select the folder containing the exported scene audio files.
-            2. Choose a **Project workflow** when most or all scenes use the same ComfyUI workflow.
-            3. Select a scene from the scene list and listen to its audio.
-            4. Review or create the lyric transcription for vocal scenes.
-            5. Choose the **Artist action** and **Camera action**, and add scene direction notes when needed.
-            6. Check the workflow inputs, duration and reference media for the selected scene.
-            7. Use **Generate Prompt with LM Studio** to create a prompt, then review or edit it manually.
-            8. Click **Approve scene prompt** when the prompt is ready.
-            9. Click **Send to ComfyUI** to render the scene.
-            10. Use **Scene workflow** only when one scene needs a different workflow from the project default.
-
-            Vocal/instrumental type, original timing and audio references come from `scenes.json`.
-            """
-        )
+    left, right = st.columns(2)
+    global_settings["characters"] = left.text_area("Recurring characters / wardrobe", value=global_settings["characters"], key=project_key + "_characters")
+    global_settings["concept"] = right.text_area("Concept / continuity", value=global_settings["concept"], key=project_key + "_concept")
 
     # Optional project-wide workflow. Scenes can inherit this or override it.
     workflow_options = [""] + mapped_workflows(ROOT)
@@ -598,11 +560,8 @@ with editor:
         if st.button("Cancel model load"):
             st.session_state.pop("mvd_pending_load", None)
             st.rerun()
-    generate = st.button(
-        "Regenerate with LM Studio" if state["prompt"] else "Generate Prompt with LM Studio",
-        disabled=not generation_allowed or bool(pending),
-        key="mvd_generate_prompt",
-    )
+    generate = st.button("Regenerate with LM Studio" if state["prompt"] else "Generate Prompt with LM Studio",
+                         disabled=not generation_allowed or bool(pending))
     if generate or confirmed:
         instance = None
         try:
@@ -752,13 +711,7 @@ with editor:
             asset_dir = ROOT / "data" / "director_renders"
             asset_dir.mkdir(parents=True, exist_ok=True)
             suffix = Path(output_info["filename"]).suffix or ".mp4"
-            try:
-                scene_number = int(info["number"])
-                scene_basename = f"scene_{scene_number:03d}"
-            except (TypeError, ValueError):
-                safe_scene = re.sub(r"[^A-Za-z0-9_-]+", "_", str(info["number"])).strip("_") or state["id"]
-                scene_basename = f"scene_{safe_scene}"
-            local_name = f"{scene_basename}{suffix}"
+            local_name = f"{project[KEY]['id']}_{state['id']}_{prompt_id}{suffix}"
             local_path = asset_dir / local_name
             local_path.write_bytes(video_bytes)
 
@@ -766,7 +719,7 @@ with editor:
                 state="rendered",
                 output=output_info,
                 video_asset=str(local_path.relative_to(ROOT).as_posix()),
-                video_name=local_name,
+                video_name=output_info["filename"],
             )
             persist(project)
             st.rerun()

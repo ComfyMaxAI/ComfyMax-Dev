@@ -1,51 +1,57 @@
 {
-  "name": "director_1_reference_image",
+  "name": "director_minimax_h3_r2v",
   "description": "ComfyMax custom workflow mapping.",
   "h3_mode": "ref2va",
   "fields": {
     "prompt": {
-      "node_id": "1",
+      "node_id": "138",
       "input": "value",
       "type": "prompt",
       "label": "Prompt"
     },
     "duration": {
-      "node_id": "903",
+      "node_id": "132",
       "input": "value",
       "type": "select_number",
       "label": "Duration",
-      "default": 0.4,
+      "default": 8.0,
       "options": [
-        0.4,
         5.0,
 		6.0,
 		7.0,
-		8.0,
+        8.0,
 		9.0,
         10.0,
+		11.0,
+		12.0,
+		13.0,
+		14.0,
         15.0,
         20.0
       ]
     },
     "resolution": {
-      "node_id": "903",
-      "input": "value",
+      "node_id": "115",
+      "input": "megapixels",
       "type": "select_number",
       "label": "Resolution",
       "default": 0.4,
       "options": [
         0.4,
         0.5,
+        0.6,
         0.7,
+        0.8,
+        0.9,
         1.0
       ]
     },
     "aspect_ratio": {
-      "node_id": "902",
+      "node_id": "115",
       "input": "aspect_ratio",
       "type": "select",
       "label": "Aspect ratio",
-      "default": "1:1 (Square)",
+      "default": "3:4 (Portrait Standard)",
       "options": [
         "1:1 (Square)",
         "2:3 (Portrait Photo)",
@@ -58,58 +64,58 @@
       ]
     },
     "steps": {
-      "node_id": "914:904",
+      "node_id": "144",
       "input": "value",
       "type": "integer",
       "label": "Steps",
-      "default": 32,
+      "default": 4,
       "min": 0,
-      "max": 4
+      "max": 30
     },
     "seed": {
       "node_id": "129",
       "input": "noise_seed",
       "type": "integer",
       "label": "Seed",
-      "default": 1009047507707890,
+      "default": 506247563924617,
       "min": 0,
       "max": 9007199254740991
     },
     "picture_1": {
-      "node_id": "901",
+      "node_id": "137",
       "input": "image",
       "type": "image",
       "label": "Reference image 1"
     },
     "audio_1": {
-      "node_id": "920",
+      "node_id": "147",
       "input": "audio",
       "type": "audio",
       "label": "Reference audio 1"
     },
     "unet_model": {
-      "node_id": "914:127",
+      "node_id": "127",
       "input": "unet_name",
       "type": "model_setting",
       "setting": "minimax_h3.unet",
       "label": "MiniMax H3 video model"
     },
     "video_vae": {
-      "node_id": "914:120",
+      "node_id": "120",
       "input": "vae_name",
       "type": "model_setting",
       "setting": "minimax_h3.video_vae",
       "label": "Video VAE"
     },
     "audio_vae": {
-      "node_id": "914:120",
+      "node_id": "120",
       "input": "vae_name",
       "type": "model_setting",
       "setting": "minimax_h3.audio_vae",
       "label": "Audio VAE"
     },
     "text_encoder": {
-      "node_id": "914:128",
+      "node_id": "128",
       "input": "clip_name",
       "type": "model_setting",
       "setting": "minimax_h3.clip",
