@@ -364,6 +364,7 @@ with st.expander("Global music video settings", expanded=True):
             8. Click **Approve scene prompt** when the prompt is ready.
             9. Click **Send to ComfyUI** to render the scene.
             10. Use **Scene workflow** only when one scene needs a different workflow from the project default.
+            11. Download the video from the preview window to a directory of your choice.
 
             Vocal/instrumental type, original timing and audio references come from `scenes.json`.
             """
