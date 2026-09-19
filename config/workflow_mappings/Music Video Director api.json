@@ -1,53 +1,52 @@
 {
-  "name": "director_minimax_h3_r2v",
+  "name": "Music Video Director api",
   "description": "ComfyMax custom workflow mapping.",
   "h3_mode": "ref2va",
+  "video_output_node_id": "2293",
   "fields": {
+    "active_clips": {
+      "node_id": "2508",
+      "input": "active_clips",
+      "type": "integer",
+      "label": "Aantal clips (H3 Controller)",
+      "default": 1,
+      "min": 1,
+      "max": 20
+    },
     "prompt": {
-      "node_id": "138",
-      "input": "value",
+      "node_id": "110",
+      "input": "prompt",
       "type": "prompt",
       "label": "Prompt"
     },
     "duration": {
-      "node_id": "132",
+      "node_id": "101",
       "input": "value",
       "type": "select_number",
       "label": "Duration",
-      "default": 8.0,
+      "default": 15.0,
       "options": [
         5.0,
-		6.0,
-		7.0,
-        8.0,
-		9.0,
         10.0,
-		11.0,
-		12.0,
-		13.0,
-		14.0,
         15.0,
         20.0
       ]
     },
     "resolution": {
-      "node_id": "115",
+      "node_id": "100",
       "input": "megapixels",
       "type": "select_number",
       "label": "Resolution",
-      "default": 0.4,
+      "default": 0.5,
       "options": [
         0.4,
         0.5,
-        0.6,
         0.7,
-        0.8,
-        0.9,
         1.0
       ]
     },
     "aspect_ratio": {
-      "node_id": "115",
+      "node_id": "100",
       "input": "aspect_ratio",
       "type": "select",
       "label": "Aspect ratio",
@@ -64,7 +63,7 @@
       ]
     },
     "steps": {
-      "node_id": "144",
+      "node_id": "970",
       "input": "value",
       "type": "integer",
       "label": "Steps",
@@ -72,50 +71,63 @@
       "min": 0,
       "max": 30
     },
+	"clip_start_seconds": {
+      "node_id": "1738",
+      "input": "expression",
+      "type": "text",
+      "label": "Clip start (seconden)",
+      "default": "0"
+    },
     "seed": {
-      "node_id": "129",
+      "node_id": "120",
       "input": "noise_seed",
       "type": "integer",
       "label": "Seed",
-      "default": 506247563924617,
+      "default": 514005817509111,
       "min": 0,
       "max": 9007199254740991
     },
     "picture_1": {
-      "node_id": "137",
+      "node_id": "911",
       "input": "image",
       "type": "image",
       "label": "Reference image 1"
     },
+    "picture_2": {
+      "node_id": "910",
+      "input": "image",
+      "type": "image",
+      "label": "Reference image 2"
+    },
     "audio_1": {
-      "node_id": "147",
+      "node_id": "940",
       "input": "audio",
-      "type": "audio",
-      "label": "Reference audio 1"
+      "type": "master_audio",
+      "label": "Full original song"
     },
     "unet_model": {
-      "node_id": "127",
+      "node_id": "1",
       "input": "unet_name",
       "type": "model_setting",
       "setting": "minimax_h3.unet",
       "label": "MiniMax H3 video model"
     },
     "video_vae": {
-      "node_id": "120",
+      "node_id": "4",
       "input": "vae_name",
       "type": "model_setting",
       "setting": "minimax_h3.video_vae",
       "label": "Video VAE"
     },
     "audio_vae": {
-      "node_id": "120",
+      "node_id": "4",
       "input": "vae_name",
       "type": "model_setting",
       "setting": "minimax_h3.audio_vae",
       "label": "Audio VAE"
     },
     "text_encoder": {
-      "node_id": "128",
+      "node_id": "2",
       "input": "clip_name",
       "type": "model_setting",
       "setting": "minimax_h3.clip",

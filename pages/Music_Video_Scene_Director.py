@@ -1,5 +1,6 @@
 """Selected-scene directing, generation and rendering using ComfyMax services."""
 import json
+import hashlib
 import re
 import sqlite3
 import subprocess
@@ -11,15 +12,19 @@ from pathlib import Path
 
 import streamlit as st
 
-from modules.comfyui import ComfyUIClient, ComfyUIError
+from modules.comfyui import ComfyUIClient, ComfyUIError, ComfyRenderError
 from modules.lmstudio import LMStudioClient, LMStudioError, ModelLoadConfirmationRequired
 from modules.music_video_director import (
     KEY, ProjectStore, approve_scene, compose_prompt, export_project, import_project,
     scene_info, scene_status, signature, timeline, title, validate_project,
 )
-from modules.music_video_ui import duration_matches, lyrics_transcription_ui, mapped_inputs, preset
+from modules.h3_music_prompt_builder import build_h3_music_prompt
+from modules.music_video_ui import (
+    duration_matches, lyrics_transcription_ui, mapped_inputs, preset,
+    store_project_audio, read_project_audio,
+)
 from modules.scene_workflow import (
-    check_render, completed_render, load_mapped_workflow, mapped_workflows, prompt_system, submit_mapped_workflow, video_output_node_id,
+    check_render, render_asset_path, load_mapped_workflow, mapped_workflows, prompt_system, submit_mapped_workflow, video_output_node_id,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -108,6 +113,23 @@ def unload_comfyui_models(comfy_url):
         raise RuntimeError(f"ComfyUI is unreachable: {exc.reason}") from exc
 
 
+def comfyui_unet_models(comfy_url):
+    """Return UNET/diffusion model filenames reported by ComfyUI."""
+    url = comfy_url.rstrip("/") + "/object_info/UNETLoader"
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise RuntimeError(f"Could not read ComfyUI video model list: {exc}") from exc
+
+    try:
+        spec = data["UNETLoader"]["input"]["required"]["unet_name"]
+        options = spec[0] if isinstance(spec, list) and spec else []
+    except (KeyError, TypeError, IndexError):
+        options = []
+    return [str(value) for value in options if value]
+
+
 def unload_all_lmstudio_models(lm_url):
     base_url = lm_url.rstrip("/")
     if base_url.endswith("/v1"):
@@ -177,7 +199,7 @@ with st.sidebar:
     st.header("Local services")
     director_lm_url = st.text_input("LM Studio", value="http://127.0.0.1:1234", key="mvd_lm_url")
     director_comfy_url = st.text_input("ComfyUI", value="http://127.0.0.1:8188", key="mvd_comfy_url")
-    st.caption("Start LM Studio and ComfyUI locally before using the connection.")
+    st.caption("Use LM Studio or the local H3 builder for prompts. ComfyUI is required for rendering.")
     st.divider()
 
     with st.container(border=True):
@@ -224,6 +246,42 @@ def choose_scenes_folder(initial_folder=""):
         return selected or ""
     except Exception as exc:
         raise RuntimeError(f"Could not open the folder picker: {exc}") from exc
+
+
+def extract_last_frame(video_path, output_path):
+    """Extract the final usable video frame to a PNG with FFmpeg."""
+    video_path = Path(video_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-sseof",
+        "-0.05",
+        "-i",
+        str(video_path),
+        "-frames:v",
+        "1",
+        "-update",
+        "1",
+        str(output_path),
+    ]
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=30, check=False
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "FFmpeg was not found. Add ffmpeg.exe to PATH before using automatic last-frame extraction."
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("FFmpeg timed out while extracting the last frame.") from exc
+
+    if result.returncode != 0 or not output_path.is_file():
+        details = (result.stderr or result.stdout or "Unknown FFmpeg error").strip()
+        raise RuntimeError(f"Could not extract the last frame with FFmpeg: {details}")
+    return output_path
 
 
 def scene_audio_from_folder(folder, scene):
@@ -334,8 +392,18 @@ with st.expander("Open or import a project", expanded="mvd_project" not in st.se
             st.error(str(exc))
 
 if "mvd_project" not in st.session_state:
-    st.info("Import scenes.json from the music Scene Builder, or reopen a saved project.")
-    st.stop()
+    # A browser/page restart creates a fresh Streamlit session. Reopen the most
+    # recently saved Director project automatically so scene progress is not lost.
+    if saved:
+        try:
+            replace_project(store.load(saved[0]["id"]))
+            st.info("Reopened the most recently used Director project automatically.")
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            st.error(f"Could not reopen the most recent Director project: {exc}")
+            st.stop()
+    else:
+        st.info("Import scenes.json from the music Scene Builder to start a Director project.")
+        st.stop()
 try:
     project = validate_project(st.session_state.mvd_project)
 except ValueError as exc:
@@ -351,16 +419,50 @@ progress = st.empty()
 with st.expander("Global music video settings", expanded=True):
     global_settings["video_style"] = preset("Video style / type", global_settings["video_style"], presets["video_style"], project_key + "_style")
 
+    st.markdown("**H3 master song**")
+    master_upload = st.file_uploader(
+        "Full original song",
+        type=["wav", "mp3", "flac", "ogg", "m4a", "aac", "opus"],
+        key=project_key + "_master_song",
+        help=(
+            "Upload the complete original song when the chosen workflow has a master-audio input. It uses this "
+            "master song; the scene start time selects the required section."
+        ),
+    )
+    if master_upload is not None:
+        try:
+            new_master = store_project_audio(
+                ROOT, master_upload.getvalue(), master_upload.name, master_upload.type
+            )
+            if new_master != global_settings.get("master_song_asset"):
+                global_settings["master_song_asset"] = new_master
+                for project_scene in project["scenes"]:
+                    project_scene[KEY]["approved_signature"] = ""
+                persist(project)
+        except (OSError, ValueError) as exc:
+            st.error(f"Could not store master song: {exc}")
+
+    master_song_asset = global_settings.get("master_song_asset")
+    if master_song_asset:
+        try:
+            master_info = read_project_audio(ROOT, master_song_asset)
+            st.success(f"Master song ready: {master_info[1]}")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            st.warning(f"Saved master song is unavailable: {exc}")
+            master_song_asset = None
+    else:
+        st.info("A master song is needed only for workflows with a mapped master-audio input.")
+
     with st.expander("How to use this page", expanded=False):
         st.markdown(
             """
-            1. Import your `scenes.json` and select the folder containing the exported scene audio files.
+            1. Import your `scenes.json`, choose the **full original master song**, and optionally select the folder containing the short scene audio files for preview/Whisper.
             2. Choose a **Project workflow** when most or all scenes use the same ComfyUI workflow.
             3. Select a scene from the scene list and listen to its audio.
             4. Review or create the lyric transcription for vocal scenes.
             5. Choose the **Artist action** and **Camera action**, and add scene direction notes when needed.
             6. Check the workflow inputs, duration and reference media for the selected scene.
-            7. Use **Generate Prompt with LM Studio** to create a prompt, then review or edit it manually.
+            7. Choose **LM Studio** or **Local H3 builder**, generate a prompt, then review or edit it manually.
             8. Click **Approve scene prompt** when the prompt is ready.
             9. Click **Send to ComfyUI** to render the scene.
             10. Use **Scene workflow** only when one scene needs a different workflow from the project default.
@@ -369,6 +471,10 @@ with st.expander("Global music video settings", expanded=True):
             Vocal/instrumental type, original timing and audio references come from `scenes.json`.
             """
         )
+
+    left, right = st.columns(2)
+    global_settings["characters"] = left.text_area("Recurring characters / wardrobe", value=global_settings["characters"], key=project_key + "_characters")
+    global_settings["concept"] = right.text_area("Concept / continuity", value=global_settings["concept"], key=project_key + "_concept")
 
     # Optional project-wide workflow. Scenes can inherit this or override it.
     workflow_options = [""] + mapped_workflows(ROOT)
@@ -394,6 +500,9 @@ with st.expander("Global music video settings", expanded=True):
                 project_state["assets"] = {}
                 project_state["duration_ack"] = False
                 project_state["approved_signature"] = ""
+        for key in list(st.session_state):
+            if key.startswith(project_key + "_") and "_mapped_" in key:
+                del st.session_state[key]
         persist(project)
 
 nav, editor = st.columns([1, 2])
@@ -409,7 +518,7 @@ with nav:
         status = scene_status(project, project["scenes"][index])
         scene_labels[value] = f"{icons[status]} {info['number']} · {info['type'].title()} · {info['duration']:.2f}s · {status}"
     st.markdown("##### Scene source")
-    source_dir = ROOT / "data" / "director_scene_sources" / project[KEY]["id"]
+    source_dir = ROOT / "data" / "director_scene_sources" / hashlib.sha256(project[KEY]["id"].encode()).hexdigest()[:32]
     source_dir.mkdir(parents=True, exist_ok=True)
 
     uploaded_scene_folder = st.file_uploader(
@@ -474,6 +583,22 @@ with nav:
             st.markdown("##### Scene video")
             st.video(preview_path.read_bytes())
             st.caption(current_render.get("video_name", preview_path.name))
+            last_frame_asset = current_render.get("last_frame_asset")
+            if last_frame_asset:
+                last_frame_path = ROOT / last_frame_asset
+                if last_frame_path.exists():
+                    st.markdown("##### Last frame")
+                    st.image(str(last_frame_path), caption=current_render.get("last_frame_name", last_frame_path.name))
+                    st.download_button(
+                        "Download last frame",
+                        data=last_frame_path.read_bytes(),
+                        file_name=current_render.get("last_frame_name", last_frame_path.name),
+                        mime="image/png",
+                        use_container_width=True,
+                        key=prefix + "download_last_frame" if "prefix" in locals() else project_key + "_download_last_frame_" + state["id"],
+                    )
+            if current_render.get("last_frame_error"):
+                st.warning("Video rendered, but automatic last-frame extraction failed: " + current_render["last_frame_error"])
         else:
             st.warning("The saved scene video could not be found on disk.")
 
@@ -501,6 +626,51 @@ with editor:
     with right:
         state["camera_action"] = preset("Camera action", state["camera_action"], presets["camera_action"], prefix + "camera")
     state["notes"] = st.text_area("Scene direction / continuity notes", value=state["notes"], key=prefix + "notes")
+
+    with st.expander("H3 prompt details", expanded=False):
+        state["location"] = st.text_input(
+            "Scene / location",
+            value=state.get("location", ""),
+            key=prefix + "location",
+            help="Example: music studio, luxury nightclub, city street at night.",
+        )
+        ref_left, ref_right = st.columns(2)
+        state["picture_1_role"] = ref_left.text_input(
+            "Picture 1 defines",
+            value=state.get("picture_1_role", "facial identity of the performer"),
+            key=prefix + "picture_1_role",
+            help="Usually the performer's facial identity.",
+        )
+        state["picture_2_role"] = ref_right.text_input(
+            "Picture 2 defines",
+            value=state.get("picture_2_role", ""),
+            key=prefix + "picture_2_role",
+            help="Example: the music studio environment, wardrobe, or full-body appearance.",
+        )
+        state["lyric_language"] = st.text_input(
+            "Lyric language",
+            value=state.get("lyric_language", "English"),
+            key=prefix + "lyric_language",
+        )
+        state["clip_start_seconds"] = st.number_input(
+            "Master song start / clip_start_seconds",
+            min_value=0.0,
+            value=float(state.get("clip_start_seconds", info["start"])),
+            step=0.001,
+            format="%.6f",
+            key=prefix + "clip_start_seconds",
+            help=(
+                "Absolute start position in the full master song for this H3 clip. "
+                "This is separate from the short scene-audio file used for preview/Whisper."
+            ),
+        )
+        state["continuation_action"] = st.text_area(
+            "End / continuation instruction",
+            value=state.get("continuation_action", ""),
+            key=prefix + "continuation_action",
+            help="Optional. Leave empty to use the safe default that keeps motion and camera trajectory in progress.",
+        )
+
     installed_workflows = mapped_workflows(ROOT)
     project_workflow = str(global_settings.get("workflow", "") or "")
     scene_override = str(state.get("workflow", "") or "")
@@ -545,9 +715,57 @@ with editor:
             with st.expander("Workflow inputs and render settings", expanded=True):
                 values, media, problems = mapped_inputs(
                     ROOT, mapping, state, settings, prefix + "mapped_",
-                    scene_duration=info["duration"], source_audio=str(source_scene_audio or scene.get("audio_file") or "")
+                    scene_duration=info["duration"],
+                    source_audio=str(source_scene_audio) if source_scene_audio else None,
+                    master_audio_asset=master_song_asset,
                 )
-                if not any(r.get("type") == "audio" for r in mapping["fields"].values()) and scene.get("audio_file"):
+                # H3 master-song workflows may expose clip_start_seconds as a mapped input.
+                # Keep the Director's persistent master-song position authoritative.
+                for field_name, field_rule in mapping.get("fields", {}).items():
+                    if field_name == "clip_start_seconds" or field_rule.get("setting") == "clip_start_seconds":
+                        start_value = float(state.get("clip_start_seconds", info["start"]))
+                        values[field_name] = str(start_value) if field_rule.get("type") == "text" else start_value
+                        state["inputs"][field_name] = values[field_name]
+
+                # Allow the MiniMax H3 diffusion/UNET model to be selected per scene.
+                # The selected filename is written to the mapped field immediately before submission.
+                unet_fields = [
+                    (name, rule) for name, rule in mapping.get("fields", {}).items()
+                    if rule.get("type") == "model_setting" and rule.get("setting") == "minimax_h3.unet"
+                ]
+                for unet_field, unet_rule in unet_fields:
+                    current_unet = str(
+                        state.get("video_model_override")
+                        or values.get(unet_field)
+                        or ""
+                    )
+                    try:
+                        available_unets = comfyui_unet_models(st.session_state.get("mvd_comfy_url") or app_config["comfyui_url"])
+                    except RuntimeError as exc:
+                        available_unets = []
+                        st.warning(str(exc))
+
+                    # Keep the currently configured model selectable even if ComfyUI cannot list it.
+                    model_options = list(available_unets)
+                    if current_unet and current_unet not in model_options:
+                        model_options.insert(0, current_unet)
+
+                    if model_options:
+                        selected_unet = st.selectbox(
+                            unet_rule.get("label", "MiniMax H3 video model"),
+                            model_options,
+                            index=model_options.index(current_unet) if current_unet in model_options else 0,
+                            key=prefix + "video_model_override",
+                            help="Select the ComfyUI diffusion model for this scene. The choice is saved per scene.",
+                        )
+                        if selected_unet != state.get("video_model_override"):
+                            state["video_model_override"] = selected_unet
+                            state["approved_signature"] = ""
+                        values[unet_field] = selected_unet
+                        state["inputs"][unet_field] = selected_unet
+                    elif current_unet:
+                        values[unet_field] = current_unet
+                if not any(r.get("type") in ("audio", "master_audio") for r in mapping["fields"].values()) and scene.get("audio_file"):
                     st.caption("This mapping has no audio input. The source WAV is preserved as a reference but will not be sent to this workflow.")
                 match = duration_matches(values.get("duration"), info["duration"])
                 if not match:
@@ -566,117 +784,92 @@ with editor:
     else:
         st.caption("No workflow selected. You can still review audio, direct the scene and edit prompts. Select a project or scene workflow before rendering.")
 
-    lm_url = st.session_state.get("mvd_lm_url") or app_config["lmstudio_url"]
     comfy_url = st.session_state.get("mvd_comfy_url") or app_config["comfyui_url"]
-    lm = LMStudioClient(lm_url, timeout=120)
     comfy = ComfyUIClient(comfy_url)
-    with st.expander("LM Studio model", expanded=not bool(state["prompt"])):
-        if "mvd_models" not in st.session_state or st.button("Refresh LM Studio models"):
+    for problem in problems:
+        st.info(problem)
+    busy = state["render"].get("state") in ("queued", "submitting")
+
+    prompt_key = prefix + "prompt"
+    state["prompt"] = st.session_state.get(prompt_key, state["prompt"])
+    mode = st.radio("Prompt generator", ["LM Studio", "Local H3 builder"], index=1, horizontal=True, key=prefix + "generator")
+    replace_prompt = st.checkbox("Replace my current prompt when regenerating", key=prefix + "replace_prompt") if state["prompt"].strip() else True
+    if mode == "Local H3 builder":
+        image_count = sum(1 for item in media.values() if item and item[0] == "image")
+        generate_label = "Regenerate H3 Prompt" if state["prompt"].strip() else "Generate H3 Prompt"
+        if st.button(generate_label, disabled=busy or not replace_prompt, key="mvd_generate_prompt"):
+            state["prompt"] = build_h3_music_prompt(project, scene, image_count=image_count,
+                render_duration=values.get("duration", info["duration"]),
+                audio_source=("master" if any((mapping or {}).get("fields", {}).get(k, {}).get("type") == "master_audio" for k in media)
+                              else "scene" if any(v[0] == "audio" for v in media.values()) else None),
+                has_video_context=any(v[0] == "video" for v in media.values()))
+            state["prompt_source"] = "deterministic_h3_builder"
+            state["approved_signature"] = ""
+            st.session_state[prompt_key] = state["prompt"]
+            persist(project)
+            st.rerun()
+    else:
+        lm_url = st.session_state.get("mvd_lm_url") or app_config["lmstudio_url"]
+        lm = LMStudioClient(lm_url, timeout=120)
+        if st.session_state.get("mvd_models_url") != lm_url or st.button("Refresh LM Studio models"):
             try:
-                st.session_state.mvd_models = LMStudioClient(app_config["lmstudio_url"], timeout=5).list_models()
+                st.session_state.mvd_models = LMStudioClient(lm_url, timeout=5).list_models()
+                st.session_state.mvd_models_url = lm_url
             except (LMStudioError, ValueError) as exc:
                 st.session_state.mvd_models = []
                 st.warning(str(exc))
         model = st.selectbox("LM Studio model", st.session_state.get("mvd_models", []), key="mvd_model")
-    for problem in problems:
-        st.info(problem)
-    busy = state["render"].get("state") in ("queued", "submitting")
-    replace_prompt = st.checkbox("Replace my current prompt when regenerating", key=prefix + "replace_prompt") if state["prompt"].strip() else True
-    generation_allowed = bool(model and replace_prompt and not busy)
-    pending = st.session_state.get("mvd_pending_load")
-    request_key = (project[KEY]["id"], state["id"], model, lm_url)
-    if pending and pending["key"] != request_key:
-        st.session_state.pop("mvd_pending_load", None)
-        pending = None
-    approved_instances = None
-    confirmed = False
-    if pending:
-        st.warning("LM Studio already has loaded models: " + ", ".join(f"{i.model} ({i.instance_id})" for i in pending["instances"]))
-        if st.button("Unload listed models and generate", disabled=not generation_allowed):
-            approved_instances = pending["instances"]
-            confirmed = True
+        allowed = bool(model and replace_prompt and not busy)
+        pending = st.session_state.get("mvd_pending_load")
+        request_key = (project[KEY]["id"], state["id"], model, lm_url)
+        if pending and pending["key"] != request_key:
             st.session_state.pop("mvd_pending_load", None)
-        if st.button("Cancel model load"):
-            st.session_state.pop("mvd_pending_load", None)
-            st.rerun()
-    generate = st.button(
-        "Regenerate with LM Studio" if state["prompt"] else "Generate Prompt with LM Studio",
-        disabled=not generation_allowed or bool(pending),
-        key="mvd_generate_prompt",
-    )
-    if generate or confirmed:
-        instance = None
-        try:
-            with st.spinner("Loading LM Studio model…"):
-                instance = lm.load_model(model, approved_instances=approved_instances)
-                st.session_state.mvd_model_instance = instance
-
-            def _generate_scene_prompt():
-                return lm.generate_prompt(
-                    compose_prompt(project, scene, mapping or {}),
-                    model,
-                    prompt_system(
-                        mapping or {},
-                        values.get("duration", info["duration"]),
-                        any(item[0] == "image" for item in media.values()),
-                    ),
-                    app_config.get("temperature", 0.7),
-                    images=[
-                        (content, mime)
-                        for kind, _, content, mime in media.values()
-                        if kind == "image"
-                    ] or None,
-                )
-
-            lm_status = st.empty()
-            lm_progress = st.progress(0)
-            checks = 0
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(_generate_scene_prompt)
-                while not future.done():
-                    checks += 1
-                    lm_status.info("LM Studio is generating the scene prompt…")
-                    lm_progress.progress(min(95, 5 + checks))
-                    with gpu_slot.container():
-                        draw_gpu_monitor()
-                    time.sleep(1)
-                generated = future.result()
-
-            lm_progress.progress(100)
-            lm_status.success("Scene prompt generated.")
-            state["prompt"] = generated.text
-            state["model"] = generated.model
-            state["approved_signature"] = ""
-            st.session_state[prefix + "prompt"] = generated.text
-            persist(project)
-
-        except ModelLoadConfirmationRequired as exc:
-            st.session_state.mvd_pending_load = {
-                "key": request_key,
-                "instances": exc.instances,
-            }
-            persist(project)
-            st.rerun()
-        except (LMStudioError, ValueError) as exc:
-            st.error(str(exc))
-        finally:
-            if instance is not None:
-                try:
-                    lm.unload_model(instance)
-                except LMStudioError as exc:
-                    st.warning(f"LM Studio model could not be unloaded automatically: {exc}")
-                else:
-                    st.session_state.pop("mvd_model_instance", None)
-                    with gpu_slot.container():
-                        draw_gpu_monitor()
-
-        if state.get("prompt"):
-            st.rerun()
+            pending = None
+        approved_instances = None
+        confirmed = False
+        if pending:
+            st.warning("LM Studio already has loaded models: " + ", ".join(f"{i.model} ({i.instance_id})" for i in pending["instances"]))
+            if st.button("Unload listed models and generate", disabled=not allowed):
+                approved_instances = pending["instances"]
+                confirmed = True
+                st.session_state.pop("mvd_pending_load", None)
+            if st.button("Cancel model load"):
+                st.session_state.pop("mvd_pending_load", None)
+                st.rerun()
+        clicked = st.button("Regenerate with LM Studio" if state["prompt"] else "Generate Prompt with LM Studio",
+                            disabled=not allowed or bool(pending))
+        if clicked or confirmed:
+            try:
+                with st.spinner("Generating scene prompt with LM Studio…"):
+                    instance = lm.load_model(model, approved_instances=approved_instances)
+                    st.session_state.mvd_model_instance = instance
+                    st.session_state.mvd_model_server = lm_url
+                    try:
+                        generated = lm.generate_prompt(compose_prompt(project, scene, mapping), model,
+                            prompt_system(mapping or {}, values.get("duration", info["duration"]), any(v[0] == "image" for v in media.values())),
+                            app_config.get("temperature", 0.7),
+                            images=[(v[2], v[3]) for v in media.values() if v[0] == "image"] or None)
+                        state["prompt"] = generated.text
+                        state["prompt_source"] = "lm_studio"
+                        state["model"] = generated.model
+                        state["approved_signature"] = ""
+                        st.session_state[prompt_key] = generated.text
+                    finally:
+                        lm.unload_model(instance)
+                        st.session_state.pop("mvd_model_instance", None)
+                persist(project)
+                st.rerun()
+            except ModelLoadConfirmationRequired as exc:
+                st.session_state.mvd_pending_load = {"key": request_key, "instances": exc.instances}
+                persist(project)
+                st.rerun()
+            except (LMStudioError, ValueError) as exc:
+                st.error(str(exc))
     if st.session_state.get("mvd_model_instance"):
-        st.warning("The LM Studio instance has not been confirmed unloaded. Unload it before rendering.")
+        st.warning("Unload the Director's LM Studio model before rendering.")
         if st.button("Retry unloading Director model"):
             try:
-                lm.unload_model(st.session_state.mvd_model_instance)
+                LMStudioClient(st.session_state.mvd_model_server).unload_model(st.session_state.mvd_model_instance)
                 st.session_state.pop("mvd_model_instance", None)
                 st.rerun()
             except LMStudioError as exc:
@@ -695,7 +888,7 @@ with editor:
         project[KEY]["selected_scene_id"] = selected
         if persist(project):
             st.success("Scene saved.")
-    if approve.button("Approve scene prompt", disabled=not state["prompt"].strip() or busy):
+    if approve.button("Approve scene prompt", disabled=not state["prompt"].strip() or not effective_workflow or bool(problems) or busy):
         project[KEY]["selected_scene_id"] = selected
         approve_scene(project, scene)
         persist(project)
@@ -705,79 +898,79 @@ with editor:
     render = state["render"]
     render_label = "Render Again" if render.get("output") or render.get("video_asset") else "Send to ComfyUI"
 
-    if st.button(
-        render_label,
-        type="primary",
-        disabled=not approved or not effective_workflow or bool(problems) or busy or bool(st.session_state.get("mvd_model_instance")),
-    ):
-        state["render"] = {
-            "state": "submitting",
-            "signature": signature(project, scene),
-            "server": comfy_url,
-        }
-        persist(project)
-
+    if st.button(render_label, type="primary",
+                 disabled=not approved or not effective_workflow or bool(problems) or busy or bool(st.session_state.get("mvd_model_instance"))):
         try:
-            with st.spinner("Uploading media and sending workflow to ComfyUI…"):
-                prompt_id, final_values = submit_mapped_workflow(
-                    comfy, workflow, mapping, values, media
-                )
-                state["render"].update(
-                    state="queued",
-                    prompt_id=prompt_id,
-                    workflow=effective_workflow,
-                    values=final_values,
-                )
-                persist(project)
-
-            status_box = st.empty()
-            render_progress = st.progress(0)
-            checks = 0
-            completed = None
-
-            with st.spinner("ComfyUI is rendering the video…"):
-                while completed is None:
-                    completed = completed_render(comfy, prompt_id, output_node_id=video_output_node_id(workflow, mapping))
-                    if completed is None:
-                        checks += 1
-                        render_progress.progress(min(95, 5 + checks))
-                        status_box.info("Rendering in ComfyUI…")
-                        with gpu_slot.container():
-                            draw_gpu_monitor()
-                        time.sleep(1)
-
-            output_info, video_bytes = completed
-            render_progress.progress(100)
-            status_box.success("Render complete.")
-
-            asset_dir = ROOT / "data" / "director_renders"
-            asset_dir.mkdir(parents=True, exist_ok=True)
-            suffix = Path(output_info["filename"]).suffix or ".mp4"
-            try:
-                scene_number = int(info["number"])
-                scene_basename = f"scene_{scene_number:03d}"
-            except (TypeError, ValueError):
-                safe_scene = re.sub(r"[^A-Za-z0-9_-]+", "_", str(info["number"])).strip("_") or state["id"]
-                scene_basename = f"scene_{safe_scene}"
-            local_name = f"{scene_basename}{suffix}"
-            local_path = asset_dir / local_name
-            local_path.write_bytes(video_bytes)
-
-            state["render"].update(
-                state="rendered",
-                output=output_info,
-                video_asset=str(local_path.relative_to(ROOT).as_posix()),
-                video_name=local_name,
-            )
-            persist(project)
-            st.rerun()
-
-        except (ComfyUIError, ValueError, OSError) as exc:
-            state["render"].update(state="failed", error=str(exc))
-            persist(project)
+            output_node = video_output_node_id(workflow, mapping)
+            # Record intent before contacting ComfyUI. A failed local save blocks submission.
+            previous_render = state["render"]
+            state["render"] = {"state": "submitting", "signature": signature(project, scene),
+                "server": comfy_url, "output_node_id": output_node, "workflow": effective_workflow}
+            if not persist(project):
+                state["render"] = previous_render
+            else:
+                try:
+                    prompt_id, final_values = submit_mapped_workflow(comfy, workflow, mapping, values, media)
+                except (ComfyUIError, ValueError, OSError) as exc:
+                    # A timeout may occur after the server accepted the job. Require a queue check.
+                    state["render"]["error"] = str(exc)
+                    persist(project)
+                    st.error(f"Could not confirm submission. Check the ComfyUI queue before retrying. {exc}")
+                else:
+                    state["render"].update(state="queued", prompt_id=prompt_id, values=final_values)
+                    if persist(project):
+                        st.rerun()
+                    else:
+                        st.warning(f"Keep this queue ID: {prompt_id}. Do not submit the scene again.")
+        except ValueError as exc:
             st.error(str(exc))
 
     render = state["render"]
+    if render.get("prompt_id") and st.button("Check render status"):
+        render_client = ComfyUIClient(render.get("server") or comfy_url)
+        try:
+            output_info = check_render(render_client, render)
+            if output_info:
+                # Persist confirmed success before downloading or extracting an optional preview.
+                persist(project)
+                try:
+                    video_bytes = render_client.download_output(output_info["filename"], output_info.get("subfolder", ""), output_info.get("type", "output"))
+                    local_path = render_asset_path(ROOT, project[KEY]["id"], state["id"], render["prompt_id"], output_info["filename"])
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    local_path.write_bytes(video_bytes)
+                    render.update(video_asset=local_path.relative_to(ROOT).as_posix(), video_name=output_info["filename"])
+                    render.pop("download_error", None)
+                    last_frame_path = local_path.with_name("last_frame.png")
+                    try:
+                        extract_last_frame(local_path, last_frame_path)
+                    except RuntimeError as exc:
+                        render["last_frame_error"] = str(exc)
+                    else:
+                        render.update(last_frame_asset=last_frame_path.relative_to(ROOT).as_posix(), last_frame_name="last_frame.png")
+                        render.pop("last_frame_error", None)
+                except (OSError, ValueError, ComfyUIError) as exc:
+                    render["download_error"] = str(exc)
+                if not render.get("unload_requested"):
+                    try:
+                        unload_comfyui_models(render.get("server") or comfy_url)
+                    except RuntimeError as exc:
+                        render["unload_error"] = str(exc)
+                    else:
+                        render["unload_requested"] = True
+                        render.pop("unload_error", None)
+            persist(project)
+            if output_info or render.get("state") == "failed":
+                st.rerun()
+            st.info("The job has no completed video yet. Its queue ID is retained; no new render was submitted.")
+        except ComfyUIError as exc:
+            persist(project)
+            st.warning(f"Status connection failed. The queue ID was kept; retry the status check, not submission. {exc}")
+    if render.get("download_error"):
+        st.warning("Video output confirmed, but the local preview could not be downloaded. Check render status to retry: " + render["download_error"])
+
+    render = state["render"]
+    if render.get("unload_error"):
+        st.warning("Render completed, but the ComfyUI model could not be unloaded automatically: " + render["unload_error"])
     if render.get("prompt_id"):
         st.caption(f"ComfyUI job: {render['prompt_id']} · {render.get('state', '')}")
 
@@ -800,4 +993,7 @@ progress.progress(rendered / len(rows))
 overview.dataframe(rows, hide_index=True, height=360, use_container_width=True)
 persist(project)
 st.download_button("Download scenes.json with Director state", export_project(project), "scenes.json", "application/json")
-st.caption("Changes save locally after each interaction. Original scene timings, audio references and unknown JSON fields are retained. Source files are never overwritten.")
+st.caption(
+    "Changes save locally after each interaction and the most recent Director project reopens automatically "
+    "after a page/browser restart. Original scene timings, audio references and unknown JSON fields are retained."
+)

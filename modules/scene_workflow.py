@@ -124,7 +124,7 @@ def video_output_node_id(workflow, mapping=None):
 def check_render(client, render, output_node_id=None):
     """A queue ID or a still image is never counted as a rendered video."""
     try:
-        output = client.get_completed_output(render["prompt_id"], output_node_id=output_node_id)
+        output = client.get_completed_output(render["prompt_id"], output_node_id=output_node_id or render.get("output_node_id"))
         if output is not None:
             if Path(output["filename"]).suffix.lower() not in (".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v"):
                 raise ComfyRenderError("The workflow completed without an expected video output.")
@@ -152,3 +152,14 @@ def completed_render(client, prompt_id, output_node_id=None):
         output.get("type", "output"),
     )
     return output, video_bytes
+
+
+def render_asset_path(root, project_id, scene_id, prompt_id, filename):
+    """Keep each project/scene/job separate, including arbitrary imported IDs."""
+    def component(value):
+        return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:32]
+    suffix = Path(filename).suffix.lower()
+    if suffix not in (".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v"):
+        raise ValueError("Expected a supported video output.")
+    return (Path(root) / "data" / "director_renders" / component(project_id)
+            / component(scene_id) / component(prompt_id) / ("video" + suffix))

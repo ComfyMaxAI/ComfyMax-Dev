@@ -130,6 +130,7 @@ def mapped_inputs(
     *,
     scene_duration=None,
     source_audio=None,
+    master_audio_asset=None,
 ):
     values, media, problems = {}, {}, []
 
@@ -179,6 +180,20 @@ def mapped_inputs(
             else:
                 problems.append(f"Upload {label}.")
 
+        elif kind == "master_audio":
+            # Project-wide full song. Unlike normal scene audio, this is never
+            # populated from the short scene WAV used by Whisper/preview.
+            asset = master_audio_asset
+            if asset:
+                try:
+                    media[name] = _read_media(root, asset, "audio")
+                    values[name] = media[name][1]
+                    st.success(f"Master song: {media[name][1]}")
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    problems.append(f"{label}: select the master song again ({exc}).")
+            else:
+                problems.append(f"Choose the full master song in Global music video settings for {label}.")
+
         elif kind in ("audio", "video"):
             # If Audio Chunker supplied a scene WAV and the user has not chosen
             # an override, import it automatically into the persistent asset store.
@@ -227,7 +242,7 @@ def mapped_inputs(
             options = rule.get("options", [])
             is_duration = name.lower() == "duration" or label.lower() == "duration"
 
-            if kind == "select_number" and is_duration:
+            if kind == "select_number" and is_duration and rule.get("allow_custom_duration", False):
                 options = _duration_options(options, scene_duration)
 
             if not options:
@@ -237,7 +252,7 @@ def mapped_inputs(
             # For duration, prefer the actual scene/audio duration when no
             # explicit user choice has yet been stored.
             preferred = saved
-            if is_duration and name not in state["inputs"] and scene_duration is not None:
+            if is_duration and name not in state["inputs"] and scene_duration in options:
                 preferred = float(scene_duration)
 
             index = options.index(preferred) if preferred in options else 0
@@ -291,7 +306,7 @@ def mapped_inputs(
             name: value
             for name, value in values.items()
             if mapping["fields"][name].get("type")
-            not in ("image", "audio", "video", "prompt")
+            not in ("image", "audio", "master_audio", "video", "prompt")
         }
     )
     return values, media, problems
@@ -304,78 +319,48 @@ def duration_matches(actual, expected):
         return False
 
 
-def lyrics_transcription_ui(scene, source_audio, prefix, *, default_model="small"):
-    """Render the per-scene local Whisper controls and keep lyrics editable."""
-    from modules.whisper_transcriber import WhisperTranscriptionError, transcribe_audio
+def store_project_audio(root, content, filename, mime):
+    """Store a project-wide master-song asset in the Director asset store."""
+    return _store_media(root, content, filename, mime, "audio")
 
-    scene_type = str(scene.get("type", "vocal" if scene.get("lyrics") else "instrumental")).lower()
-    st.markdown("##### Lyrics / vocals")
 
-    if scene_type != "vocal":
-        st.info("Instrumental scene — transcription not required.")
-        return scene.get("lyrics", "")
+def read_project_audio(root, asset):
+    """Read a stored project-wide master-song asset."""
+    return _read_media(root, asset, "audio")
 
-    if source_audio:
-        st.caption(f"Scene audio: {Path(source_audio).name}")
-    else:
-        st.warning("No scene audio is available for transcription.")
 
-    model_options = ["small", "medium", "large-v3", "base"]
-    model_index = model_options.index(default_model) if default_model in model_options else 0
-    model_size = st.selectbox(
-        "Whisper model",
-        model_options,
-        index=model_index,
-        key=prefix + "whisper_model",
-        help="small is the ComfyMax default for fast scene transcription. Larger models can improve recognition but require more resources.",
-    )
-    language = st.text_input(
-        "Language (optional)",
-        value="",
-        key=prefix + "whisper_language",
-        placeholder="e.g. en, nl, fr — leave empty for automatic detection",
-    ).strip()
-
-    if st.button(
-        "Transcribe with Whisper",
-        key=prefix + "whisper_transcribe",
-        disabled=not bool(source_audio),
-        use_container_width=True,
-    ):
+def lyrics_transcription_ui(scene, source_audio, prefix):
+    """Edit a Director transcript while preserving the imported scene verbatim."""
+    state = scene["comfymax_director"]
+    key = prefix + "lyrics"
+    pending = st.session_state.pop(prefix + "pending_transcript", None)
+    if pending is not None:
+        state["lyrics_override"] = pending["text"]
+        state["transcription"] = pending
+        st.session_state[key] = pending["text"]
+    original = str(scene.get("lyrics", scene.get("text", scene.get("context", ""))) or "")
+    if key not in st.session_state:
+        st.session_state[key] = state.get("lyrics_override", original)
+    edited = st.text_area("Lyrics / transcript", key=key, height=120,
+        help="Director edits are stored separately; the original scene text remains unchanged.")
+    if edited != original or "lyrics_override" in state:
+        state["lyrics_override"] = edited
+    model_size = st.selectbox("Whisper model", ["tiny", "base", "small", "medium", "large-v3"], index=2, key=prefix + "whisper_model")
+    language = st.text_input("Language", value=str(state.get("whisper_language", scene.get("whisper_language", ""))),
+                            key=prefix + "whisper_language", help="Optional language code: en, nl, fr.").strip()
+    state["whisper_language"] = language
+    can_transcribe = bool(source_audio and Path(source_audio).is_file())
+    if st.button("Transcribe with Whisper", key=prefix + "whisper_transcribe", disabled=not can_transcribe):
         try:
-            with st.spinner("Transcribing scene vocals locally…"):
-                result = transcribe_audio(
-                    source_audio,
-                    model_size=model_size,
-                    language=language or None,
-                )
-            scene["lyrics"] = result["text"]
-            st.session_state[prefix + "lyrics_editor"] = result["text"]
-            scene.setdefault("comfymax_director", {})
-            state = scene["comfymax_director"]
-            state["transcription"] = {
-                "model": result["model"],
-                "language": result["language"],
-                "language_probability": result["language_probability"],
-                "segments": result["segments"],
-                "device": result.get("device", "cpu"),
-                "compute_type": result.get("compute_type", ""),
-                "gpu_fallback": result.get("gpu_fallback", False),
-            }
-            if result.get("gpu_fallback"):
-                st.info("GPU acceleration is not available. ComfyMax automatically used CPU transcription.")
-            else:
-                st.caption("Whisper device: NVIDIA CUDA")
-            st.success("Transcription completed. Review the lyrics below before generating the H3 prompt.")
-        except WhisperTranscriptionError as exc:
-            st.error(str(exc))
-
-    lyrics = st.text_area(
-        "Lyrics / transcript",
-        value=str(scene.get("lyrics", "")),
-        height=160,
-        key=prefix + "lyrics_editor",
-        help="Correct any recognition errors here. This exact text is supplied to LM Studio as scene context.",
-    )
-    scene["lyrics"] = lyrics
-    return lyrics
+            from modules.whisper_transcriber import transcribe_audio
+            with st.spinner("Transcribing scene audio with Whisper..."):
+                result = transcribe_audio(source_audio, model_size=model_size, language=language or None, prefer_gpu=True)
+            result["text"] = str(result.get("text") or "").strip()
+            st.session_state[prefix + "pending_transcript"] = result
+        except Exception as exc:
+            st.error(f"Whisper transcription failed: {exc}")
+        else:
+            st.rerun()
+    if not can_transcribe:
+        st.caption("No local scene audio was found for Whisper transcription. Lyrics can still be entered manually.")
+    return edited

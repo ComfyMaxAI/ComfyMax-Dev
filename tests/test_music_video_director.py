@@ -3,6 +3,7 @@ import json
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -112,7 +113,7 @@ class DirectorDataTests(unittest.TestCase):
         prompt = compose_prompt(value, scene, {"h3_mode": "ref2va"})
         for expected in ("Scene 2", "Vocal", "Écoute-moi", "Walking toward camera", "text_only.json", "6 seconds", "Clip time starts at zero"):
             self.assertIn(expected, prompt)
-        self.assertIn("do not add singing", compose_prompt(value, value["scenes"][0]))
+        self.assertIn("do not add singing", compose_prompt(value, value["scenes"][0]).lower())
 
 
 class WorkflowTests(unittest.TestCase):
@@ -185,6 +186,8 @@ class DirectorUITests(unittest.TestCase):
             ("modules.lmstudio.LMStudioClient.list_models", {"return_value": ["test-model"]}),
             ("modules.lmstudio.LMStudioClient.load_model", {"return_value": "instance"}),
             ("modules.lmstudio.LMStudioClient.unload_model", {}),
+            ("urllib.request.urlopen", {"side_effect": urllib.error.URLError("Test: service not connected")}),
+            ("modules.comfyui.ComfyUIClient.download_output", {"side_effect": ComfyUIError("Test: no preview download")}),
         ]:
             patcher = patch(target, **kwargs)
             patcher.start()
@@ -225,16 +228,18 @@ class DirectorUITests(unittest.TestCase):
         self.assertEqual(scene_status(saved, saved["scenes"][0]), "Rendered")
         second = saved["scenes"][1][KEY]["id"]
         self.select("Select scene").select(second).run()
-        self.assertEqual(self.select("Scene workflow").value, "")
+        self.assertEqual(self.select("Scene workflow").value, "__project__")
         self.assertEqual(self.area("Editable scene prompt").value, "")
         self.button("Open project").click().run()
+        self.select("Select scene").select(saved["scenes"][0][KEY]["id"]).run()
         self.assertFalse(self.app.exception)
         self.assertEqual(self.area("Editable scene prompt").value, "Manually reviewed scene")
         self.area("Editable scene prompt").input("Changed prompt").run()
-        self.assertTrue(self.button("Send to ComfyUI").disabled)
+        self.assertTrue(self.button("Render Again").disabled)
 
     def test_generation_is_editable_never_queues_and_requires_replace(self):
         self.prepare_workflow()
+        next(r for r in self.app.radio if r.label == "Prompt generator").set_value("LM Studio").run()
         with patch("modules.lmstudio.LMStudioClient.generate_prompt", return_value=GeneratedPrompt("Generated scene", "test-model", "instance")) as generate, \
              patch("modules.comfyui.ComfyUIClient.queue_prompt") as queue:
             self.button("Generate Prompt with LM Studio").click().run()
@@ -250,6 +255,7 @@ class DirectorUITests(unittest.TestCase):
 
     def test_model_confirmation_cancel_preserves_prompt(self):
         self.prepare_workflow()
+        next(r for r in self.app.radio if r.label == "Prompt generator").set_value("LM Studio").run()
         with patch("modules.lmstudio.LMStudioClient.load_model", side_effect=ModelLoadConfirmationRequired([LoadedInstance("other", "other-id")])):
             self.button("Generate Prompt with LM Studio").click().run()
         self.assertFalse(self.app.exception)

@@ -192,11 +192,13 @@ class ComfyUIClient:
             return None
 
         status = entry.get("status", {})
+        if status.get("status_str") in ("error", "failed"):
+            raise ComfyRenderError(f"ComfyUI did not complete prompt {prompt_id} successfully.")
         if not status.get("completed"):
             return None
 
         if status.get("status_str") != "success":
-            raise ComfyUIError(
+            raise ComfyRenderError(
                 f"ComfyUI did not complete prompt {prompt_id} successfully."
             )
 
@@ -208,7 +210,7 @@ class ComfyUIClient:
             node_id = str(output_node_id)
             node_output = outputs.get(node_id)
             if not isinstance(node_output, dict):
-                raise ComfyUIError(
+                raise ComfyRenderError(
                     f"The render is complete, but ComfyUI reported no output for "
                     f"the configured video output node {node_id}."
                 )
@@ -224,7 +226,7 @@ class ComfyUIClient:
 
             # ComfyUI SaveVideo currently reports files through the 'images'
             # collection. Also accept common future/alternate collection names.
-            for collection_name in ("videos", "images", "files"):
+            for collection_name in ("videos", "images", "files", "gifs"):
                 items = node_output.get(collection_name, [])
                 if not isinstance(items, list):
                     continue
@@ -233,7 +235,7 @@ class ComfyUIClient:
                     if not isinstance(item, dict):
                         continue
                     filename = item.get("filename")
-                    if not filename:
+                    if not isinstance(filename, str) or not filename:
                         continue
                     if Path(filename).suffix.lower() not in video_extensions:
                         continue
@@ -245,12 +247,12 @@ class ComfyUIClient:
                     }
 
         if output_node_id is not None:
-            raise ComfyUIError(
+            raise ComfyRenderError(
                 f"The render is complete, but video output node {output_node_id} "
                 "reported no supported video file."
             )
 
-        raise ComfyUIError(
+        raise ComfyRenderError(
             "The render is complete, but ComfyUI reported no video output."
         )
 

@@ -26,22 +26,30 @@ Preset lists live in `config/music_video_presets.json`.
 
 Select a mapped workflow per scene. Its fields use the existing mapping files,
 model defaults in Settings, and existing LM Studio and ComfyUI clients. Reference
-images are stored under `data/director_assets` so they survive a restart. Audio
-and video mapping fields accept an existing ComfyUI input filename; make the
-file available to ComfyUI first. The bundled mappings currently contain no audio
-input, and importing a manifest alone does not transmit or synchronize its WAVs.
+images, audio and video are stored under `data/director_assets` so they survive a
+restart. Existing media-upload methods provide mapped assets to ComfyUI. A
+`master_audio` field uses the project master song; an `audio` field uses its scene
+asset. A mapping without an audio field does not receive audio just because the
+project has a WAV or master song. Lyrics corrections/transcriptions are stored
+as `comfymax_director.lyrics_override`, preserving original source text and fields.
+The existing optional Whisper controls are retained; no new segmentation or
+audio-processing system is introduced.
 
 Many real scene durations are fractional, while bundled workflows offer fixed
-durations. Choose a render length and explicitly acknowledge any difference.
+durations. Exact source duration is added to a fixed option list only if its mapping
+explicitly sets `allow_custom_duration: true`. Otherwise choose a render length and explicitly acknowledge any difference.
 This saves a render setting without changing source timing or samples. Any
 trimming, audio alignment or final assembly remains a separate editing step.
 
-**Generate Prompt with LM Studio** sends scene type, source timing, lyrics/context,
+Choose **LM Studio** in **Prompt generator**. **Generate Prompt with LM Studio** sends scene type, source timing, lyrics/context,
 global style, artist/camera direction and workflow information through the existing
 LM Studio client and H3 prompt instructions. Other mapped workflows receive a
 general scene-prompt instruction. Existing model-unload confirmation is preserved.
 Generation never queues a render. Review/edit the result, or paste your own.
-Regeneration requires explicitly allowing replacement of existing prompt text.
+The existing **Local H3 builder** remains available as an alternative. Both modes
+require explicitly allowing replacement before regenerating existing text.
+Generation never starts rendering. A failed LM Studio unload blocks rendering
+until its saved instance has been unloaded.
 
 **Approve scene prompt** binds approval to the exact prompt, source scene,
 global settings, workflow/mapping, reference assets and mapped inputs. Changing
@@ -73,3 +81,20 @@ again on another installation. Database and assets are excluded from Git.
 No batch rendering, thumbnails, gallery, audio processing or video assembly is
 added. Real LM Studio generation and GPU rendering require local service/model
 validation; automated tests mock service calls.
+
+## Render recovery and validation (19 September 2026)
+
+Submission persists its intent before contacting ComfyUI, then retains the queue
+ID, server, output node and scene revision. **Check render status** can resume
+after navigation/restart without submitting again. Connection failures retain
+queued status; confirmed execution errors become Failed. Confirmed video output
+counts as Rendered even if downloading a local preview fails; retrying the status
+check can recover the preview. An ambiguous submission without a queue ID requires
+checking the server queue before retrying.
+
+Local videos/last frames now use separate project, scene and job directories;
+rerenders and different projects no longer overwrite another scene's video.
+Original chunker files and WAV samples are never changed by these operations.
+
+The three Director MiniMax mappings use node 119 for the video VAE and node 120
+for the audio VAE. All other pre-existing workflow/model choices are retained.

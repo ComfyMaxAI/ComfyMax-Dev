@@ -1,0 +1,714 @@
+{
+  "1": {
+    "inputs": {
+      "unet_name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Clip 1 - Load Diffusion Model"
+    }
+  },
+  "2": {
+    "inputs": {
+      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "type": "minimax",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Clip 1 - Load CLIP"
+    }
+  },
+  "3": {
+    "inputs": {
+      "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Clip 1 - Load VAE"
+    }
+  },
+  "4": {
+    "inputs": {
+      "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Clip 1 - Load VAE"
+    }
+  },
+  "5": {
+    "inputs": {
+      "shift_video": 12,
+      "shift_audio": 3,
+      "model": [
+        "977",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3SigmaShift",
+    "_meta": {
+      "title": "ModelSamplingMiniMaxH3"
+    }
+  },
+  "100": {
+    "inputs": {
+      "aspect_ratio": "3:4 (Portrait Standard)",
+      "megapixels": 0.5,
+      "multiple": 32
+    },
+    "class_type": "ResolutionSelector",
+    "_meta": {
+      "title": "Resolution Selector"
+    }
+  },
+  "101": {
+    "inputs": {
+      "value": 15
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Float"
+    }
+  },
+  "102": {
+    "inputs": {
+      "expression": "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17",
+      "values.a": [
+        "101",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Math Expression"
+    }
+  },
+  "110": {
+    "inputs": {
+      "prompt": "subject_definitions:\n<Subject 1> is the same performer defined jointly by <Picture 1> for facial identity and <Picture 2> the music studio\n\nsummary:\n[reference generation] Begin one continuous performance in a music studio  <Subject 1>.\n\nretention_analysis:\n<Subject 1> (appears throughout [Shot 1]): fully_preserved - preserve facial identity, hair identity, body proportions, wardrobe, colors, and distinctive referenced features while expression, pose, lighting, framing, and movement follow the performance.\n\ndetailed_description:\n[Shot 1] Begin in music studio from <Picture 2>. (S1) stands behind the microphone. The camera glides backward at chest height and slowly begins a clockwise arc. <Subject 1> (S1) visibly sings with clear readable mouth and jaw movement throughout the vocal phrase: <d>[English] Cause you're the best thing that ever happened to me.</d>\n\n\nEnd with his turn, the camera arc, the raised hand so Clip 2 continues the same physical shot.\n\noverall_soundscape:\nVery subtle room tone, cloth movement, and faint air through the doorway beneath the song.\n\nnon_diegetic_music:\nThe protected master-song audio drives the intimate singing, breathing, body rhythm, and emotional timing.",
+      "width": [
+        "100",
+        0
+      ],
+      "height": [
+        "100",
+        1
+      ],
+      "length": [
+        "102",
+        1
+      ],
+      "ref_image_size": "match",
+      "clip": [
+        "2",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ],
+      "audio_vae": [
+        "2510",
+        0
+      ],
+      "ref_images.ref_image_0": [
+        "910",
+        0
+      ],
+      "ref_images.ref_image_1": [
+        "911",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3ReferenceToVideo",
+    "_meta": {
+      "title": "Clip 1 - MiniMax H3 Reference to Video"
+    }
+  },
+  "120": {
+    "inputs": {
+      "noise_seed": 514005817509111
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "121": {
+    "inputs": {
+      "model": [
+        "5",
+        0
+      ],
+      "conditioning": [
+        "110",
+        0
+      ]
+    },
+    "class_type": "BasicGuider",
+    "_meta": {
+      "title": "Basic Guider"
+    }
+  },
+  "123": {
+    "inputs": {
+      "scheduler": "simple",
+      "steps": [
+        "970",
+        0
+      ],
+      "denoise": 1,
+      "model": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "BasicScheduler"
+    }
+  },
+  "124": {
+    "inputs": {
+      "noise": [
+        "120",
+        0
+      ],
+      "guider": [
+        "121",
+        0
+      ],
+      "sampler": [
+        "973",
+        0
+      ],
+      "sigmas": [
+        "123",
+        0
+      ],
+      "latent_image": [
+        "1755",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "Clip 1 - SamplerCustomAdvanced"
+    }
+  },
+  "200": {
+    "inputs": {
+      "prompt": "subject_definitions:\n<Subject 1> is the same performer defined jointly by <Picture 1> for facial identity and <Picture 2> The music studio\n\nsummary:\n[reference generation] Continue the same unbroken shot while <Subject 1> remains visibly singing.\n\nretention_analysis:\n<Subject 1> (appears throughout [Shot 1]): fully_preserved - preserve stable referenced identity while pose, expression, framing, lighting, and motion continue from the protected incoming visual prefix.\n\ndetailed_description:\n[Shot 1] Continue the exact incoming body turn and camera arc. <Subject 1> (S1) keeps visibly singing with readable mouth and jaw movement in exact sync with the protected master-song audio: <d>[English] I said, I think I already wrote your name somewhere I can't find.</d>\n\nEnd with <Subject 1> singing while the same camera arc continues.\n\noverall_soundscape:\nSubtle room tone.\n\nnon_diegetic_music:\nN/A",
+      "width": [
+        "100",
+        0
+      ],
+      "height": [
+        "100",
+        1
+      ],
+      "length": [
+        "102",
+        1
+      ],
+      "ref_image_size": "match",
+      "clip": [
+        "2",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ],
+      "audio_vae": [
+        "2510",
+        0
+      ],
+      "ref_images.ref_image_0": [
+        "910",
+        0
+      ],
+      "ref_images.ref_image_1": [
+        "911",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3ReferenceToVideo",
+    "_meta": {
+      "title": "Clip 2 - MiniMax H3 Reference to Video"
+    }
+  },
+  "201": {
+    "inputs": {
+      "clip_start_seconds": [
+        "1739",
+        0
+      ],
+      "context_length": [
+        "1753",
+        1
+      ],
+      "source_fps": 24,
+      "crop": "disabled",
+      "latent": [
+        "200",
+        1
+      ],
+      "audio_vae": [
+        "2510",
+        0
+      ],
+      "master_audio": [
+        "940",
+        0
+      ],
+      "source_latent": [
+        "124",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3SongMaskedAVContext",
+    "_meta": {
+      "title": "H3 Song Audio + Masked Video Context"
+    }
+  },
+  "210": {
+    "inputs": {
+      "noise_seed": 903826866713850
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "211": {
+    "inputs": {
+      "model": [
+        "5",
+        0
+      ],
+      "conditioning": [
+        "200",
+        0
+      ]
+    },
+    "class_type": "BasicGuider",
+    "_meta": {
+      "title": "Basic Guider"
+    }
+  },
+  "214": {
+    "inputs": {
+      "noise": [
+        "210",
+        0
+      ],
+      "guider": [
+        "211",
+        0
+      ],
+      "sampler": [
+        "973",
+        0
+      ],
+      "sigmas": [
+        "123",
+        0
+      ],
+      "latent_image": [
+        "201",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "Clip 2 - SamplerCustomAdvanced"
+    }
+  },
+  "910": {
+    "inputs": {
+      "image": "Daniel_character_sheet.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "911": {
+    "inputs": {
+      "image": "Vintage microfoon in nachtelijke muziekstudio.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "940": {
+    "inputs": {
+      "audio": "You're The Best Thing That Ever Happened To Me - Vinck Daniel.mp3"
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "Load Audio"
+    }
+  },
+  "970": {
+    "inputs": {
+      "value": 4
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Int"
+    }
+  },
+  "973": {
+    "inputs": {
+      "sampler_name": "res_multistep"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "977": {
+    "inputs": {
+      "lora_name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_resized_avg_rank_21_bf16.safetensors",
+      "strength_model": 1,
+      "model": [
+        "1756",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Clip 1 - LoraLoaderModelOnly"
+    }
+  },
+  "1733": {
+    "inputs": {
+      "value": 39
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Int"
+    }
+  },
+  "1734": {
+    "inputs": {
+      "value": 39
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Int"
+    }
+  },
+  "1736": {
+    "inputs": {
+      "expression": "(a - b) / 24",
+      "values.a": [
+        "102",
+        1
+      ],
+      "values.b": [
+        "1753",
+        1
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Math Expression"
+    }
+  },
+  "1738": {
+    "inputs": {
+      "expression": "100",
+      "values.a": [
+        "1736",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Clip Start"
+    }
+  },
+  "1739": {
+    "inputs": {
+      "expression": "a * 1",
+      "values.a": [
+        "1736",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Math Expression"
+    }
+  },
+  "1753": {
+    "inputs": {
+      "expression": "max(5, min(a, (b - (b % 2)) / 2)) - ((max(5, min(a, (b - (b % 2)) / 2)) - 5) % 17)",
+      "values.a": [
+        "1733",
+        0
+      ],
+      "values.b": [
+        "102",
+        1
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Math Expression"
+    }
+  },
+  "1755": {
+    "inputs": {
+      "clip_start_seconds": [
+        "1738",
+        0
+      ],
+      "context_length": 0,
+      "source_fps": 24,
+      "crop": "disabled",
+      "latent": [
+        "110",
+        1
+      ],
+      "audio_vae": [
+        "2510",
+        0
+      ],
+      "master_audio": [
+        "940",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3SongMaskedAVContext",
+    "_meta": {
+      "title": "H3 Song Audio + Masked Video Context"
+    }
+  },
+  "1756": {
+    "inputs": {
+      "attention": "comfy kitchen attention",
+      "model": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "ModelAttentionBackend",
+    "_meta": {
+      "title": "Model Attention Backend"
+    }
+  },
+  "2291": {
+    "inputs": {
+      "samples": [
+        "124",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "2293": {
+    "inputs": {
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "h3_preview/music_clip_01",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": false,
+      "trim_to_audio": true,
+      "pingpong": false,
+      "save_output": true,
+      "images": [
+        "2291",
+        0
+      ],
+      "audio": [
+        "1755",
+        2
+      ]
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "Clip 1 - VHS Video Combine"
+    }
+  },
+  "2294": {
+    "inputs": {
+      "samples": [
+        "214",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "2296": {
+    "inputs": {
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "h3_preview/music_clip_02",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": false,
+      "trim_to_audio": true,
+      "pingpong": false,
+      "save_output": true,
+      "images": [
+        "2294",
+        0
+      ],
+      "audio": [
+        "201",
+        2
+      ]
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "Clip 2 - VHS Video Combine"
+    }
+  },
+  "2500": {
+    "inputs": {
+      "input_count": 20,
+      "context_frames": [
+        "1753",
+        1
+      ],
+      "video_overlap_frames": [
+        "1734",
+        0
+      ],
+      "filename_prefix": "video/h3_music_video",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": false,
+      "trim_to_audio": false,
+      "save_output": true,
+      "video_vae": [
+        "3",
+        0
+      ],
+      "master_audio": [
+        "940",
+        0
+      ],
+      "preview_gate": [
+        "2509",
+        0
+      ],
+      "active_clips": [
+        "2508",
+        0
+      ],
+      "clip_1": [
+        "124",
+        0
+      ],
+      "clip_2": [
+        "214",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3StreamLiveMusicVideoToVHS",
+    "_meta": {
+      "title": "H3 Stream Final Music Video to VHS"
+    }
+  },
+  "2501": {
+    "inputs": {
+      "active_clips": 2,
+      "previews": "All Active"
+    },
+    "class_type": "MiniMaxH3MusicVideoController",
+    "_meta": {
+      "title": "H3 Music Video Controller"
+    }
+  },
+  "2503": {
+    "inputs": {
+      "source": [
+        "102",
+        1
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "Preview as Text"
+    }
+  },
+  "2507": {
+    "inputs": {
+      "filenames": [
+        "2500",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3FinalizeVHSOutput",
+    "_meta": {
+      "title": "H3 Final Stream Output Sink"
+    }
+  },
+  "2508": {
+    "inputs": {
+      "value": 2
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Int"
+    }
+  },
+  "2509": {
+    "inputs": {
+      "input_count": 20,
+      "active_clips": [
+        "2508",
+        0
+      ],
+      "preview_1": [
+        "2293",
+        0
+      ],
+      "preview_2": [
+        "2296",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3LastActiveVHSPreviewBarrier",
+    "_meta": {
+      "title": "H3 Last Active VHS Preview Barrier"
+    }
+  },
+  "2510": {
+    "inputs": {
+      "audio_vae": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3AudioVAECompatibility",
+    "_meta": {
+      "title": "H3 Audio VAE Compatibility"
+    }
+  }
+}

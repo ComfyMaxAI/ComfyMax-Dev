@@ -42,7 +42,7 @@ def scene_info(project, index):
     return {"number": scene.get("scene", scene.get("scene_id", index + 1)),
             "start": start, "end": scene.get("end", start + duration), "duration": duration,
             "type": scene.get("type", "vocal" if scene.get("lyrics") else "instrumental").lower(),
-            "lyrics": scene.get("lyrics", scene.get("text", scene.get("context", "")))}
+            "lyrics": scene.get(KEY, {}).get("lyrics_override", scene.get("lyrics", scene.get("text", scene.get("context", ""))))}
 
 
 def validate_project(value):
@@ -87,16 +87,30 @@ def validate_project(value):
             raise ValueError("Invalid Director scene metadata.")
         defaults = {"id": uuid4().hex, "artist_action": scene.get("action", "Standing still"),
             "camera_action": scene.get("camera", "Static camera"), "notes": scene.get("continuity", ""),
+            "location": scene.get("location", ""), "picture_1_role": "facial identity of the performer",
+            "picture_2_role": scene.get("location", ""), "lyric_language": "English",
+            "continuation_action": "", "prompt_source": "",
+            "clip_start_seconds": float(info["start"]),
             "workflow": "", "inputs": {}, "assets": {}, "prompt": scene.get("prompt", ""),
             "approved_signature": "", "status": "New", "render": {}, "duration_ack": False}
         for name, default in defaults.items():
             state.setdefault(name, default)
+        try:
+            state["clip_start_seconds"] = float(state.get("clip_start_seconds", info["start"]))
+        except (TypeError, ValueError):
+            state["clip_start_seconds"] = float(info["start"])
+        if state["clip_start_seconds"] < 0 or not math.isfinite(state["clip_start_seconds"]):
+            raise ValueError("Invalid scene clip_start_seconds.")
         if not isinstance(state["id"], str) or not state["id"] or state["id"] in ids:
             raise ValueError("Director scene IDs must be unique nonempty strings.")
         ids.add(state["id"])
-        for name in ("artist_action", "camera_action", "notes", "workflow", "prompt", "approved_signature"):
+        for name in ("artist_action", "camera_action", "notes", "location", "picture_1_role",
+                     "picture_2_role", "lyric_language", "continuation_action", "prompt_source",
+                     "workflow", "prompt", "approved_signature"):
             if not isinstance(state[name], str):
                 raise ValueError(f"Invalid scene {name}.")
+        if "lyrics_override" in state and not isinstance(state["lyrics_override"], str):
+            raise ValueError("Invalid scene lyrics override.")
         for name in ("inputs", "assets", "render"):
             if not isinstance(state[name], dict):
                 raise ValueError(f"Invalid scene {name}.")
@@ -123,7 +137,8 @@ def signature(project, scene):
     relevant = {"source": {k: v for k, v in scene.items() if k != KEY},
         "settings": project[KEY]["settings"],
         "direction": {k: state.get(k) for k in ("artist_action", "camera_action", "notes",
-            "inputs", "assets", "prompt", "duration_ack", "workflow_digest")},
+            "location", "picture_1_role", "picture_2_role", "lyric_language", "continuation_action",
+            "clip_start_seconds", "lyrics_override", "inputs", "assets", "prompt", "duration_ack", "workflow_digest", "video_model_override")},
         "effective_workflow": effective_workflow(project, scene)}
     return hashlib.sha256(json.dumps(relevant, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
@@ -133,7 +148,7 @@ def scene_status(project, scene):
     current = signature(project, scene)
     render = state["render"]
     if render.get("signature") == current:
-        if render.get("state") == "completed" and render.get("output"):
+        if render.get("state") in ("completed", "rendered") and render.get("output"):
             return "Rendered"
         if render.get("state") == "failed":
             return "Failed"
@@ -162,6 +177,8 @@ def compose_prompt(project, scene, mapping=None):
     lines = [
         f"Music video: {title(project)}",
         f"Video style: {settings['video_style']}",
+        f"Recurring characters: {settings['characters']}",
+        f"Concept / continuity: {settings['concept']}",
         f"Scene {info['number']} — {info['type'].title()}",
         f"Original song interval: {info['start']:.9f}–{info['end']:.9f} seconds; duration {info['duration']:.9f} seconds.",
         f"Requested rendered clip duration: {render_duration} seconds. Clip time starts at zero.",
